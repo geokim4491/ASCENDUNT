@@ -9,6 +9,7 @@
 #include "ASCENDUNT/Player/AscenduntPlayerState.h"
 #include "ASCENDUNT/Player/AscenduntPlayerController.h"
 #include "ASCENDUNT/Character/Hero/HeroPawnData.h"
+#include "ASCENDUNT/System/AscGameUserSettings.h"
 
 #include "InputMappingContext.h"
 #include "EnhancedInputSubsystems.h"
@@ -46,10 +47,9 @@ void UHeroInputComponent::BeginPlay()
 	
 }
 
-void UHeroInputComponent::SetADSSensitivity(bool bEnabled, float InSensitivityScalar)
+void UHeroInputComponent::SetADSActive(bool bEnabled)
 {
-	bADSSensitivityEnabled = bEnabled;
-	ADSSensitivityScalar = bEnabled ? FMath::Clamp(InSensitivityScalar, 0.01f, 10.0f) : 1.0f;
+	bADSActive = bEnabled;
 }
 
 void UHeroInputComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -225,7 +225,7 @@ void UHeroInputComponent::UninitializePlayerInput(bool bForceRemoveMappings)
 	CachedASC = nullptr;
 	CachedInputSubsystem = nullptr;
 	CachedPlayerController = nullptr;
-	SetADSSensitivity(false, 1.0f);
+	SetADSActive(false);
 	SetComponentTickEnabled(false);
 }
 
@@ -339,7 +339,20 @@ void UHeroInputComponent::Input_Look(const FInputActionValue& InputActionValue)
 	if (Pawn)
 	{
 		const FVector2D Value = InputActionValue.Get<FVector2D>();
-		const float SensitivityScalar = bADSSensitivityEnabled ? ADSSensitivityScalar : 1.0f;
+
+		float SensitivityScalar = 1.0f;
+		float PitchDirection = 1.0f;
+		if (const UAscGameUserSettings* Settings = UAscGameUserSettings::GetAscGameUserSettings())
+		{
+			SensitivityScalar = Settings->GetMouseSensitivity();
+			if (bADSActive)
+			{
+				SensitivityScalar *= Settings->GetADSSensitivityMultiplier();
+			}
+			PitchDirection = Settings->IsInvertYAxisEnabled() ? -1.0f : 1.0f;
+		}
+
+		SensitivityScalar *= 0.3f;
 
 		if (Value.X != 0.0f)
 		{
@@ -348,7 +361,7 @@ void UHeroInputComponent::Input_Look(const FInputActionValue& InputActionValue)
 
 		if (Value.Y != 0.0f)
 		{
-			Pawn->AddControllerPitchInput(Value.Y * SensitivityScalar);
+			Pawn->AddControllerPitchInput(Value.Y * SensitivityScalar * PitchDirection);
 		}
 	}
 }

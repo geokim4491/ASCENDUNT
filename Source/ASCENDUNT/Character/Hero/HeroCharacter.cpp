@@ -17,6 +17,9 @@
 #include "ASCENDUNT/Character/HitCollision/AscHitCollisionComponent.h"
 #include "ASCENDUNT/Interaction/AscInteractionComponent.h"
 #include "ASCENDUNT/Character/AscenduntHealthComponent.h"
+#include "ASCENDUNT/GameModes/PVE/AscPvEGameMode.h"
+#include "ASCENDUNT/GameModes/PVE/AscPvEGameState.h"
+#include "ASCENDUNT/GameModes/PVP/MatchGameMode.h"
 #include "ASCENDUNT/Weapon/WeaponEquipmentComponent.h"
 #include "ASCENDUNT/Weapon/AscenduntWeapon.h"
 #include "HeroInputComponent.h"
@@ -235,11 +238,6 @@ void AHeroCharacter::CompleteInteraction_Implementation(AHeroCharacter* Interact
 }
 
 
-void AHeroCharacter::HandleGameplayReady()
-{
-	BindMovementAttributes();
-}
-
 void AHeroCharacter::SetDownedMovementOverride(bool bEnabled, float CrawlSpeed)
 {
 	bDownedMovementOverride = bEnabled;
@@ -247,12 +245,12 @@ void AHeroCharacter::SetDownedMovementOverride(bool bEnabled, float CrawlSpeed)
 	RefreshMovementFromAttributes();
 }
 
-void AHeroCharacter::HandleGameplayDeinitialized()
+void AHeroCharacter::UninitializeGameplayBindings()
 {
 	UnbindMovementAttributes();
 }
 
-void AHeroCharacter::BindMovementAttributes()
+void AHeroCharacter::InitializeGameplayBindings()
 {
 	UnbindMovementAttributes();
 
@@ -419,6 +417,91 @@ void AHeroCharacter::EnterDeathRagdoll()
 	}
 }
 
+void AHeroCharacter::BindHealthEvents()
+{
+	if (bDeathEventBound)
+	{
+		return;
+	}
+
+	if (UAscenduntHealthComponent* HealthComp = GetAscenduntHealthComponent())
+	{
+		HealthComp->SetAutoFinishDeath(false);
+		HealthComp->OnDeathStarted.AddUniqueDynamic(this, &ThisClass::HandleDeathStarted);
+		HealthComp->OnDeathFinished.AddUniqueDynamic(this, &ThisClass::HandleDeathFinished);
+		bDeathEventBound = true;
+	}
+}
+
+void AHeroCharacter::UnbindHealthEvents()
+{
+	if (UAscenduntHealthComponent* HealthComp = GetAscenduntHealthComponent())
+	{
+		HealthComp->OnDeathStarted.RemoveDynamic(this, &ThisClass::HandleDeathStarted);
+		HealthComp->OnDeathFinished.RemoveDynamic(this, &ThisClass::HandleDeathFinished);
+		HealthComp->SetAutoFinishDeath(true);
+	}
+
+	bDeathEventBound = false;
+}
+
+void AHeroCharacter::HandleDeathStarted(AActor* OwningActor)
+{
+	if (OwningActor != this)
+	{
+		return;
+	}
+
+	const bool bIsPvE = GetWorld() && GetWorld()->GetGameState<AAscPvEGameState>() != nullptr;
+	if (bIsPvE)
+	{
+		if (HasAuthority())
+		{
+			if (UAscPvEDownedComponent* DownedComp = GetPvEDownedComponent())
+			{
+				DownedComp->EnterDowned();
+			}
+		}
+		return;
+	}
+
+	EnterDeathRagdoll();
+
+	if (HasAuthority())
+	{
+		if (UAscenduntHealthComponent* HealthComp = GetAscenduntHealthComponent())
+		{
+			HealthComp->FinishDeath();
+		}
+	}
+}
+
+void AHeroCharacter::HandleDeathFinished(AActor* OwningActor)
+{
+	if (OwningActor != this)
+	{
+		return;
+	}
+
+	EnterDeathRagdoll();
+
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (AAscPvEGameMode* PvEGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AAscPvEGameMode>() : nullptr)
+	{
+		PvEGameMode->HandleHeroFullDeath(this);
+		return;
+	}
+
+	if (AMatchGameMode* MatchGM = GetWorld() ? GetWorld()->GetAuthGameMode<AMatchGameMode>() : nullptr)
+	{
+		MatchGM->HandleHeroDeath(this);
+	}
+}
+
 void AHeroCharacter::DeinitializeForPawnReplacement(bool bPreserveHeroState)
 {
 	if (HeroInitComponent)
@@ -485,7 +568,7 @@ void AHeroCharacter::PossessedBy(AController* NewController)
 
 	if (HeroInitComponent)
 	{
-		HeroInitComponent->HandlePlayerStateChanged(GetPlayerState<AAscenduntPlayerState>());
+		HeroInitComponent->NotifyPlayerStateChanged();
 	}
 }
 
@@ -501,7 +584,7 @@ void AHeroCharacter::OnRep_PlayerState()
 
 	if (HeroInitComponent)
 	{
-		HeroInitComponent->HandlePlayerStateChanged(GetPlayerState<AAscenduntPlayerState>());
+		HeroInitComponent->NotifyPlayerStateChanged();
 	}
 }
 

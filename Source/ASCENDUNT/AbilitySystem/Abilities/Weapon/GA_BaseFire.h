@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -77,6 +77,15 @@ protected:
 	// ==========================
 
 	void SpawnProjectile_Server(const FAscenduntFireOnceContext& Ctx, const FVector& SpawnLoc, const FVector& Dir) const;
+
+	/**
+	 * 투사체 발사 방향을 정한다. 기본은 총구에서 조준점을 향하는 직선이다.
+	 *
+	 * 중력을 받는 투사체는 이 직선으로 쏘면 반드시 짧게 떨어지므로,
+	 * 파생 클래스가 탄도 해를 계산해 덮어쓴다. UGA_AIFire_Auto 참고.
+	 */
+	virtual FVector ComputeProjectileLaunchDir(const FAscenduntFireOnceContext& Ctx,
+		const FVector& MuzzleLoc, const FVector& AimPoint) const;
 
 	// ==========================
 	// Cues (최소 구현: GameplayCueTag로 실행)

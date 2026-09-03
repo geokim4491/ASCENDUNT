@@ -80,6 +80,20 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Ascendunt|Camera|ADS", meta = (ClampMin = "0.1"))
 	float ADSBlendSpeed = 14.0f;
 
+	/**
+	 * 1인칭 무기/팔의 ADS 전용 Scale / FOV. Hip-fire 값(FirstPersonScale / FirstPersonFieldOfView)
+	 * 과 별개로 둬서, ADS 로 총이 카메라에 바짝 붙을 때만 더 강하게 축소할 수 있게 한다.
+	 *
+	 * 별도 On/Off 나 알파 변수를 새로 만들지 않고 위 ADSBlendAlpha 를 그대로 재사용한다.
+	 * GA_ADS 가 SetADSFieldOfView() 로 이미 켜고 끄는 그 블렌드와 같은 타이밍으로 전환돼야
+	 * 씬 FOV 줌과 1인칭 축소가 같이 움직이기 때문이다. 즉 GA_ADS.cpp 는 수정할 필요가 없다.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Ascendunt|Camera|ADS", meta = (ClampMin = "0.001", ClampMax = "1.0"))
+	float ADSFirstPersonScale = 1.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Ascendunt|Camera|ADS", meta = (ClampMin = "5.0", ClampMax = "170.0"))
+	float ADSFirstPersonFieldOfView = 90.0f;
+
 	/** Runtime-only: do not replicate, because only the owning local player's view should be grayscale. */
 	bool bDownedGrayscaleEnabled = false;
 	

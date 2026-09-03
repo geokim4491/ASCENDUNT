@@ -103,6 +103,9 @@ public:
 	 */
 	void ServerEnsureDefaultWeapons();
 
+	// 기본 무기를 확보하고, 장착된 무기가 없으면 첫 게임플레이 무기를 장착한다.
+	void ServerInitializeDefaultLoadout();
+
 	const TArray<TObjectPtr<AAscenduntWeapon>>& GetWeaponInventory() const { return WeaponInventory; }
 
 	bool HasDefaultWeaponLoadout() const;

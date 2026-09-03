@@ -114,12 +114,10 @@ void UGA_ADS::ApplyLocalADSPresentation(
 	}
 
 	float TargetFOV = 70.0f;
-	float SensitivityScalar = 1.0f;
 	if (bEnabled && Weapon)
 	{
 		const FAscenduntWeaponModeStats& Stats = Weapon->GetCurrentModeStats();
 		TargetFOV = Stats.ADS_FOV;
-		SensitivityScalar = Stats.ADS_SensitivityScalar;
 	}
 
 	if (UAscenduntCameraComponent* Camera = UAscenduntCameraComponent::FindCameraComponent(Hero))
@@ -129,7 +127,7 @@ void UGA_ADS::ApplyLocalADSPresentation(
 
 	if (UHeroInputComponent* HeroInput = Hero->GetHeroInputComponent())
 	{
-		HeroInput->SetADSSensitivity(bEnabled, SensitivityScalar);
+		HeroInput->SetADSActive(bEnabled);
 	}
 
 	if (UHeroFirstPersonComponent* FirstPerson = Hero->GetFirstPersonComponent())

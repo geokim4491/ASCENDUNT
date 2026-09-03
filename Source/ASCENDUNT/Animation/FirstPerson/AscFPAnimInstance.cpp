@@ -4,6 +4,8 @@
 #include "AscFPAnimInstance.h"
 
 #include "ASCENDUNT/Weapon/AscenduntWeapon.h"
+#include "ASCENDUNT/Character/Hero/HeroCharacter.h"
+#include "ASCENDUNT/Character/Hero/HeroFirstPersonComponent.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -72,10 +74,26 @@ void UAscFPAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		bIsFalling = Movement->IsFalling();
 	}
 
+	// ----- ADS 상태 pull -----
+	//
+	// GA_ADS 가 UHeroFirstPersonComponent::SetADSActive() 로 세팅한 값을 여기서 매 프레임
+	// 읽어온다. GroundSpeed/bIsFalling 과 같은 pull 패턴이다. GA_ADS 는 LocalOnly 어빌리티라
+	// 이 값도 로컬 전용이며 복제되지 않는다.
+	bool bIsAiming = false;
+	if (const AHeroCharacter* HeroCharacter = Cast<AHeroCharacter>(Character))
+	{
+		if (const UHeroFirstPersonComponent* FirstPerson = HeroCharacter->GetFirstPersonComponent())
+		{
+			bIsAiming = FirstPerson->IsADSActive();
+		}
+	}
+	AimAlpha = FMath::FInterpTo(AimAlpha, bIsAiming ? 1.f : 0.f, DeltaSeconds, ADSBlendSpeed);
+
 	// ----- 자세 블렌드: Ready <-> Sprint -----
 	const bool bWantSprintPose =
 		bUseSprintPose &&
 		!bForceReadyPose &&
+		!bIsAiming &&
 		TimeSinceFire >= ReadyHoldAfterFire &&
 		GroundSpeed > SprintSpeedThreshold;
 
@@ -84,20 +102,28 @@ void UAscFPAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	const FVector BasePoseLocation = FMath::Lerp(ReadyPose.Location, SprintPose.Location, SprintAlpha);
 	const FRotator BasePoseRotation = FMath::Lerp(ReadyPose.Rotation, SprintPose.Rotation, SprintAlpha);
 
+	// ADS 는 Ready/Sprint 블렌드 결과 위에 최우선으로 덧씌운다. AimAlpha 가 1 이면
+	// SprintAlpha 가 뭐든 상관없이(위에서 !bIsAiming 으로 이미 0에 수렴시켰다) ADSPose 가 된다.
+	const FVector AimedPoseLocation = FMath::Lerp(BasePoseLocation, ADSPose.Location, AimAlpha);
+	const FRotator AimedPoseRotation = FMath::Lerp(BasePoseRotation, ADSPose.Rotation, AimAlpha);
+
 	// ----- 스웨이: 시야를 돌리면 무기가 한 박자 늦게 따라온다 -----
 	const FRotator ControlRotation = Character->GetControlRotation();
 	if (bHasPreviousControlRotation && DeltaSeconds > KINDA_SMALL_NUMBER)
 	{
 		const FRotator Delta = (ControlRotation - PreviousControlRotation).GetNormalized();
 
+		// 조준 중에는 스웨이를 줄인다. AimAlpha=0 -> 1배, AimAlpha=1 -> SwayAimingScale 배.
+		const float SwayDamp = FMath::Lerp(1.f, SwayAimingScale, AimAlpha);
+
 		const FVector TargetLocation(
 			0.f,
-			FMath::Clamp(-Delta.Yaw * SwayTranslationScale, -SwayMaxOffset, SwayMaxOffset),
-			FMath::Clamp(Delta.Pitch * SwayTranslationScale, -SwayMaxOffset, SwayMaxOffset));
+			FMath::Clamp(-Delta.Yaw * SwayTranslationScale, -SwayMaxOffset, SwayMaxOffset) * SwayDamp,
+			FMath::Clamp(Delta.Pitch * SwayTranslationScale, -SwayMaxOffset, SwayMaxOffset) * SwayDamp);
 
 		const FRotator TargetRotation(
-			Delta.Pitch * SwayRotationScale,
-			Delta.Yaw * SwayRotationScale,
+			Delta.Pitch * SwayRotationScale * SwayDamp,
+			Delta.Yaw * SwayRotationScale * SwayDamp,
 			0.f);
 
 		SwayLocation = FMath::VInterpTo(SwayLocation, TargetLocation, DeltaSeconds, SwayInterpSpeed);
@@ -113,7 +139,9 @@ void UAscFPAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		const float SpeedRatio = FMath::Clamp(GroundSpeed / BobSpeedReference, 0.f, 1.f);
 		BobTime += DeltaSeconds * BobFrequency * SpeedRatio;
 
-		const float Amplitude = BobAmplitude * SpeedRatio;
+		// 조준 중에는 바빙도 같은 배율로 줄인다.
+		const float BobDamp = FMath::Lerp(1.f, BobAimingScale, AimAlpha);
+		const float Amplitude = BobAmplitude * SpeedRatio * BobDamp;
 		BobLocation.Y = FMath::Sin(BobTime) * Amplitude;
 		BobLocation.Z = FMath::Sin(BobTime * 2.f) * Amplitude * 0.5f;
 	}
@@ -137,8 +165,8 @@ void UAscFPAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	//
 	// Mesh1P 의 부모가 카메라이므로, 카메라 공간 트랜스폼에 상대 트랜스폼의 역을 곱하면
 	// 컴포넌트 공간이 된다. 오프셋과 회전이 BP 에서 바뀌어도 자동으로 따라간다.
-	FRotator RotationInCameraSpace = BasePoseRotation + SwayRotation + RecoilRotation;
-	FVector LocationInCameraSpace = BasePoseLocation + SwayLocation + BobLocation + RecoilLocation;
+	FRotator RotationInCameraSpace = AimedPoseRotation + SwayRotation + RecoilRotation;
+	FVector LocationInCameraSpace = AimedPoseLocation + SwayLocation + BobLocation + RecoilLocation;
 
 #if !UE_BUILD_SHIPPING
 	// 콘솔 오프셋. 눈으로 맞춘 뒤 이 값을 ABP 의 ReadyPose 에 합산해 적는다.
@@ -164,6 +192,11 @@ void UAscFPAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 			SprintPose.Rotation.Yaw + GAscFPPinYaw,
 			SprintPose.Rotation.Roll + GAscFPPinRoll);
 
+		const FRotator ADSOut(
+			ADSPose.Rotation.Pitch + GAscFPPinPitch,
+			ADSPose.Rotation.Yaw + GAscFPPinYaw,
+			ADSPose.Rotation.Roll + GAscFPPinRoll);
+
 		UE_LOG(LogTemp, Warning,
 			TEXT("[FP-PIN] ReadyPose  Location 칸에 = %.1f , %.1f , %.1f   |   Rotation 칸에 = %.1f , %.1f , %.1f"),
 			ReadyPose.Location.X + GAscFPPinX, ReadyPose.Location.Y + GAscFPPinY, ReadyPose.Location.Z + GAscFPPinZ,
@@ -175,14 +208,19 @@ void UAscFPAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 			SprintOut.Roll, SprintOut.Pitch, SprintOut.Yaw);
 
 		UE_LOG(LogTemp, Warning,
+			TEXT("[FP-PIN] ADSPose    Location 칸에 = %.1f , %.1f , %.1f   |   Rotation 칸에 = %.1f , %.1f , %.1f   (조준 중 값을 맞출 땐 이 줄을 쓸 것)"),
+			ADSPose.Location.X + GAscFPPinX, ADSPose.Location.Y + GAscFPPinY, ADSPose.Location.Z + GAscFPPinZ,
+			ADSOut.Roll, ADSOut.Pitch, ADSOut.Yaw);
+
+		UE_LOG(LogTemp, Warning,
 			TEXT("[FP-PIN] Rotation 칸은 왼쪽부터 Roll, Pitch, Yaw 순서다. 위 숫자를 그대로 왼쪽부터 넣으면 된다."));
 
 		// 지금 실제로 적용 중인 값. SprintAlpha 가 0 이 아니면 화면은 두 자세의 혼합이다.
 		UE_LOG(LogTemp, Warning,
-			TEXT("[FP-PIN] 현재 적용 중  Location=(%.1f, %.1f, %.1f)  Pitch=%.1f Yaw=%.1f Roll=%.1f  SprintAlpha=%.2f"),
+			TEXT("[FP-PIN] 현재 적용 중  Location=(%.1f, %.1f, %.1f)  Pitch=%.1f Yaw=%.1f Roll=%.1f  SprintAlpha=%.2f  AimAlpha=%.2f"),
 			LocationInCameraSpace.X, LocationInCameraSpace.Y, LocationInCameraSpace.Z,
 			RotationInCameraSpace.Pitch, RotationInCameraSpace.Yaw, RotationInCameraSpace.Roll,
-			SprintAlpha);
+			SprintAlpha, AimAlpha);
 
 		// Two Bone IK 는 목표가 팔 길이 밖이면 그 위치에 손을 놓지 못하고 최대로 뻗은 채 멈춘다.
 		if (const USkeletalMeshComponent* ReachMesh = GetOwningComponent())

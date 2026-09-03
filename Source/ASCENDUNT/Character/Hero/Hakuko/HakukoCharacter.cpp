@@ -27,20 +27,20 @@ bool AHakukoCharacter::GetWeaponAOEParameters(float& OutRadius, float& OutDamage
 		OutDebugDrawDuration);
 }
 
-void AHakukoCharacter::HandleGameplayReady()
+void AHakukoCharacter::InitializeGameplayBindings()
 {
-	Super::HandleGameplayReady();
+	Super::InitializeGameplayBindings();
 	if (HakukoSkillComponent)
 	{
 		HakukoSkillComponent->InitializeForGameplay();
 	}
 }
 
-void AHakukoCharacter::HandleGameplayDeinitialized()
+void AHakukoCharacter::UninitializeGameplayBindings()
 {
 	if (HakukoSkillComponent)
 	{
 		HakukoSkillComponent->DeinitializeForGameplay();
 	}
-	Super::HandleGameplayDeinitialized();
+	Super::UninitializeGameplayBindings();
 }

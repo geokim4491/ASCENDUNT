@@ -42,8 +42,8 @@ public:
 	void RemoveIMC(UInputMappingContext* Context);
 	void ApplyIMC(UInputMappingContext* Context);
 
-	/** Local presentation only. Gameplay-authoritative ADS effects must not depend on this value. */
-	void SetADSSensitivity(bool bEnabled, float InSensitivityScalar);
+	/** Local presentation state used only to select the user ADS sensitivity multiplier. */
+	void SetADSActive(bool bEnabled);
 
 protected:
 	virtual void BeginPlay() override;
@@ -82,6 +82,5 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<AAscenduntPlayerController> CachedPlayerController;
 
-	bool bADSSensitivityEnabled = false;
-	float ADSSensitivityScalar = 1.0f;
+	bool bADSActive = false;
 };

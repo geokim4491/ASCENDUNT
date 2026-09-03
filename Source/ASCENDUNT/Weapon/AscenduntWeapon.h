@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -104,6 +104,28 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Weapon")
 	UMeshComponent* GetActiveWeaponMesh() const;
 
+	/**
+	 * 무기 모드를 전환한다. 서버 전용.
+	 *
+	 * 사격 리듬 / 데미지 / 탄창 / 몽타주 / 투사체 / VFX 는 모두
+	 * GetCurrentModeStats() 를 거쳐 읽으므로, 인덱스만 바꾸면 전부 함께 전환된다.
+	 *
+	 * 재장전 중에는 거부한다. 탄약 상태가 어긋나기 때문이다.
+	 * 모드 전환이 재장전을 대신하지 않도록 잔탄은 새 탄창 크기로 자르기만 한다.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Weapon|Mode")
+	bool SetWeaponModeByIndex(int32 NewModeIndex);
+
+	/** ModeTag 로 전환한다. 일치하는 Mode 가 없으면 false. */
+	UFUNCTION(BlueprintCallable, Category = "Weapon|Mode")
+	bool SetWeaponModeByTag(FGameplayTag ModeTag);
+
+	UFUNCTION(BlueprintPure, Category = "Weapon|Mode")
+	FGameplayTag GetCurrentModeTag() const;
+
+	UFUNCTION(BlueprintPure, Category = "Weapon|Mode")
+	int32 GetCurrentModeIndex() const { return CurrentModeIndex; }
+
 	UFUNCTION(BlueprintCallable, Category = "Weapon|XRay")
 	USkeletalMeshComponent* GetXRayWeaponMesh() const { return XRayWeaponMesh; }
 
@@ -154,8 +176,22 @@ public:
 	UFUNCTION(BlueprintCallable)
 	const struct FAscenduntWeaponModeStats& GetCurrentModeStats() const;
 
+	/**
+	 * 게임플레이용 총구 Transform. 항상 3P WeaponMesh 기준이다.
+	 * 서버 투사체 스폰/판정처럼 모든 머신에서 동일한 기준이 필요한 경로에서 사용한다.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Weapon|Projectile")
 	FTransform GetMuzzleTransform() const;
+
+	/**
+	 * 연출용 총구 Transform.
+	 * 로컬에서 1P 무기가 실제로 보이는 중이면 WeaponMesh1P의 Muzzle을 사용하고,
+	 * 그 외(서버/원격 클라이언트/3P)는 기존 WeaponMesh의 Muzzle을 사용한다.
+	 *
+	 * Muzzle Flash / Trail처럼 화면에 보이는 연출 전용으로만 사용한다.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Weapon|FirstPerson")
+	FTransform GetMuzzleVFXTransform() const;
 
 
 	/**
@@ -223,6 +259,9 @@ protected:
 
 	UFUNCTION()
 	void OnRep_CurrentModeIndex();
+
+	/** 모드가 바뀐 뒤 서버/클라 공통으로 필요한 갱신. */
+	void HandleModeChanged();
 
 	UFUNCTION()
 	void OnRep_CurrentAmmoInMag();

@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "BaseAIController.h"
@@ -445,9 +445,24 @@ void ABaseAIController::HandleTargetPerceptionUpdated(AActor* Actor, FAIStimulus
 		return;
 	}
 
-	// 감지 끊김: 현재 타겟이 Actor면 클리어
-	if (GetTargetActor() == Actor)
+	// 감지 끊김.
+	//
+	// 이 콜백은 센스별로 온다. Sight 와 Damage 는 MaxAge 가 서로 달라서
+	// (SightMaxAge / DamageConfig 5초) 한쪽 자극만 만료돼도 여기로 들어온다.
+	// 그 자리에서 바로 지우면 시야가 멀쩡한데도 타깃이 날아가고,
+	// 시야 상태가 변하지 않는 한 새 이벤트가 오지 않아 오랫동안 타깃 없이 남는다.
+	//
+	// 그래서 "다른 센스가 아직 이 대상을 감지 중인가"를 확인하고, 하나라도
+	// 살아 있으면 타깃을 유지한다. 모든 자극이 끊긴 경우에만 실제로 놓아준다.
+	if (GetTargetActor() != Actor)
 	{
-		ClearTargetActor();
+		return;
 	}
+
+	if (PerceptionComp && PerceptionComp->HasAnyActiveStimulus(*Actor))
+	{
+		return;
+	}
+
+	ClearTargetActor();
 }

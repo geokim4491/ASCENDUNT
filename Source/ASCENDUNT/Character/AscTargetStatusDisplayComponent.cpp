@@ -244,7 +244,7 @@ void UAscTargetStatusDisplayComponent::EnsureTargetHealthBarWidget()
 		TargetHealthBarWidgetComponent->SetIsReplicated(false);
 		TargetHealthBarWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		TargetHealthBarWidgetComponent->SetGenerateOverlapEvents(false);
-		TargetHealthBarWidgetComponent->SetWidgetSpace(EWidgetSpace::World);
+		TargetHealthBarWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
 		TargetHealthBarWidgetComponent->SetBlendMode(EWidgetBlendMode::Transparent);
 		TargetHealthBarWidgetComponent->SetTwoSided(true);
 		// Keep a fixed render target. More maximum health shrinks segment width instead of expanding the world-space bar.

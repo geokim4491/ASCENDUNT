@@ -7,6 +7,7 @@ AAscObjectiveBase::AAscObjectiveBase()
 {
     PrimaryActorTick.bCanEverTick = false;
     bReplicates = true;
+    bAlwaysRelevant = true;
     SetReplicateMovement(false);
 }
 

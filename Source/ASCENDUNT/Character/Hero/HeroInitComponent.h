@@ -15,36 +15,31 @@ class UAscenduntAbilitySystemComponent;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGameplayReady, APawn*, Owner);
 
 /**
- * Coordinates Hero initialization without assuming replication/lifecycle order.
+ *   캐릭터의 초기화 관리
  *
- * State contract:
- *   None
- *    -> Spawned          : Pawn + PlayerState + matching PawnData identify the Hero.
- *    -> GASInitialized  : ASC ActorInfo is bound to this Pawn and PawnData gameplay data is applied.
- *    -> GameplayReady    : gameplay-facing dependencies are prepared; local input/camera are committed last.
+ *   PS, PawnData, 무기 준비 등의 이벤트가 발생할 때마다 Evaluate() 진행
  *
- * Every asynchronous dependency owns an event that calls Evaluate().  There is intentionally
- * no retry timer: if a prerequisite can become ready later, its change path must wake this component.
+ *   Spawned          : PS, PawnData 준비
+ *   GASInitialized   : ASC 초기화 및 AbilitySet 적용
+ *   GameplayReady    : 기타 초기화, 로컬 플레이어의 입력과 카메라 연결
+ *
  */
-UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
+UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
 class ASCENDUNT_API UHeroInitComponent : public UActorComponent
 {
     GENERATED_BODY()
 
 public:
-    /** Pawn lifecycle entry point. Safe before this component's BeginPlay. */
-    void HandlePlayerStateChanged(AAscenduntPlayerState* NewPS);
 
-    /** Called when replicated/local possession state may have changed. */
+    void NotifyPlayerStateChanged();
+
     void NotifyControllerChanged();
 
-    /** Called from SetupPlayerInputComponent after the engine creates the local InputComponent. */
     void NotifyInputComponentReady();
 
-    /** Called by the owning Pawn before UnPossess/Destroy. Safe to call repeatedly. */
+
     void DeinitializeForPawnReplacement(bool bPreserveHeroState = false);
 
-    /** EndPlay fallback for destroy paths that did not explicitly request replacement teardown. */
     void Shutdown();
 
     bool IsGameplayReady() const;
@@ -59,13 +54,12 @@ private:
     void RefreshDependencies();
 
     bool CanEnterSpawned() const;
-    void EnterSpawned();
 
     bool TryEnterGASInitialized();
 
     void PrepareGameplayDependencies();
     bool CanEnterGameplayReady() const;
-    bool EnterGameplayReady();
+    bool TryEnterGameplayReady();
 
     // ----- Dependency/configuration helpers -----
     bool ValidateStaticConfiguration();
@@ -76,23 +70,10 @@ private:
     // ----- Event bindings -----
     void BindToPlayerState(AAscenduntPlayerState* PS);
     void UnbindFromPlayerState();
-
     void BindToWeaponEquipment();
     void UnbindFromWeaponEquipment();
 
-    void BindToHealthComponent();
-    void UnbindFromHealthComponent();
-
-    void HandlePawnDataAvailable();
-    void HandlePawnDataApplied();
     void HandleCurrentWeaponChanged(AAscenduntWeapon* NewWeapon, AAscenduntWeapon* PrevWeapon);
-    void HandleWeaponInventoryChanged();
-
-    UFUNCTION()
-    void HandleDeathStarted(AActor* OwningActor);
-
-    UFUNCTION()
-    void HandleDeathFinished(AActor* OwningActor);
 
     // ----- Teardown -----
     void DeinitializePawn(bool bPreserveHeroState);
@@ -110,16 +91,11 @@ private:
     TWeakObjectPtr<UAscenduntAbilitySystemComponent> CachedASC;
 
     bool bDeinitialized = false;
-    bool bStaticConfigurationChecked = false;
-    bool bStaticConfigurationValid = false;
 
     // These flags describe initialization side effects, not replicated data readiness.
     bool bAnimationInitialized = false;
     bool bHealthCompInitialized = false;
-    bool bInputCompInitialized = false;
-    bool bCameraInitialized = false;
     bool bOnSpawnAbilitiesActivatedForAvatar = false;
-    bool bDeathEventBound = false;
 
     FDelegateHandle PawnDataAvailHandle;
     FDelegateHandle PawnDataAppliedHandle;

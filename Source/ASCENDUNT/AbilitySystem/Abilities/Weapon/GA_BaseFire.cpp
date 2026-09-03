@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "GA_BaseFire.h"
@@ -103,7 +103,9 @@ bool UGA_BaseFire::BuildViewRayAndMuzzle(const FGameplayAbilityActorInfo* ActorI
 	OutViewStart = ViewLoc;
 	OutViewDir = ViewRot.Vector().GetSafeNormal();
 
-	// ---- Muzzle location (이펙트/트레이서 시작점) ----
+	// ---- Gameplay Muzzle location ----
+	// 투사체 스폰/판정 기준은 항상 3P WeaponMesh 기준을 유지한다.
+	// 로컬 1P VFX 시작점은 PostFireOnce / Trace GameplayCue에서 별도로 계산한다.
 	if (Weapon)
 	{
 		OutMuzzleLoc = Weapon->GetMuzzleTransform().GetLocation();
@@ -206,6 +208,26 @@ void UGA_BaseFire::PostFireOnce(const FAscenduntFireOnceContext& Ctx, const FVec
 		const FAscenduntWeaponModeStats& S = Ctx.Weapon->GetCurrentModeStats();
 
 		const float Desired = FMath::Max(0.01f, Ctx.Interval);
+
+		// 발사 몽타주 재생 속도.
+		//
+		// 기본은 "몽타주 길이 / 발사 간격" 이다. 연사 중에 몽타주가 정확히 한 발
+		// 간격을 채우도록 늘리거나 줄이는 계산이고, 몽타주 길이가 발사 간격과
+		// 비슷한 무기에서는 이게 맞다.
+		//
+		// 다만 발사 간격이 몽타주보다 훨씬 긴 무기(곡사포 등)는 이 계산이
+		// 슬로모션을 만든다. 그런 무기는 ModeStats 에서 고정 배속을 지정한다.
+		// 세 몽타주(3P / 무기 / 1P)에 같은 값을 써야 메시끼리 어긋나지 않는다.
+		const auto ResolveFireMontageRate = [&S, Desired](const UAnimMontage* Montage) -> float
+		{
+			if (S.FireMontagePlayRateOverride > 0.f)
+			{
+				return S.FireMontagePlayRateOverride;
+			}
+
+			return Montage ? float(Montage->GetPlayLength() / Desired) : 1.f;
+		};
+
 		ABaseAICharacter* AIAvatar = Cast<ABaseAICharacter>(GetAvatarActorFromActorInfo());
 		const bool bServerAI = AIAvatar && Ctx.bAuthority;
 
@@ -215,7 +237,7 @@ void UGA_BaseFire::PostFireOnce(const FAscenduntFireOnceContext& Ctx, const FVec
 		{
 			AIAvatar->Multicast_PlayPresentationMontage(
 				S.HeroFireMontage,
-				float(S.HeroFireMontage->GetPlayLength() / Desired),
+				ResolveFireMontageRate(S.HeroFireMontage),
 				NAME_None);
 		}
 		else if (S.HeroFireMontage && (CurrentActorInfo->IsLocallyControlled() || Ctx.bAuthority))
@@ -227,7 +249,7 @@ void UGA_BaseFire::PostFireOnce(const FAscenduntFireOnceContext& Ctx, const FVec
 			}
 
 			HeroMontageTask = UAbilityTask_PlayMontageAndWait::CreatePlayMontageAndWaitProxy(
-				this, NAME_None, S.HeroFireMontage, float(S.HeroFireMontage->GetPlayLength() / Desired)
+				this, NAME_None, S.HeroFireMontage, ResolveFireMontageRate(S.HeroFireMontage)
 				, NAME_None, /*bStopWhenAbilityEnds*/false);
 
 			if (HeroMontageTask)
@@ -242,7 +264,7 @@ void UGA_BaseFire::PostFireOnce(const FAscenduntFireOnceContext& Ctx, const FVec
 			// AI 무기 역시 서버 AnimInstance를 돌리지 않고 클라이언트에 연출만 전파한다.
 			Ctx.Weapon->Multicast_PlayWeaponMontage(
 				S.WeaponFireMontage,
-				float(S.WeaponFireMontage->GetPlayLength() / Desired));
+				ResolveFireMontageRate(S.WeaponFireMontage));
 		}
 		else if (S.WeaponFireMontage && (CurrentActorInfo->IsLocallyControlled() || Ctx.bAuthority))
 		{
@@ -254,7 +276,7 @@ void UGA_BaseFire::PostFireOnce(const FAscenduntFireOnceContext& Ctx, const FVec
 
 			const bool bReplicateToOthers = Ctx.bAuthority; // 서버만 뿌림(오너는 클라 예측으로 이미 봄)
 			WeaponMontageTask = UAT_PlayWeaponMontageAndWait::PlayWeaponMontageAndWait(
-				this, NAME_None, Ctx.Weapon, S.WeaponFireMontage, float(S.WeaponFireMontage->GetPlayLength() / Desired),
+				this, NAME_None, Ctx.Weapon, S.WeaponFireMontage, ResolveFireMontageRate(S.WeaponFireMontage),
 				bReplicateToOthers, /*bStopWhenAbilityEnds*/false);
 
 			if (WeaponMontageTask)
@@ -273,7 +295,7 @@ void UGA_BaseFire::PostFireOnce(const FAscenduntFireOnceContext& Ctx, const FVec
 			{
 				// 배율 계산식은 3P(HeroFireMontage)와 반드시 같아야 두 메시가 어긋나지 않는다.
 				FirstPerson->PlayMontage1P(S.HeroFireMontage1P,
-					float(S.HeroFireMontage1P->GetPlayLength() / Desired));
+					ResolveFireMontageRate(S.HeroFireMontage1P));
 			}
 		}
 
@@ -294,7 +316,12 @@ void UGA_BaseFire::PostFireOnce(const FAscenduntFireOnceContext& Ctx, const FVec
 	const FHitResult* HitResult = (bHasAnyHit && Hit) ? Hit : nullptr;
 	if (CurrentActorInfo->IsLocallyControlled())
 	{
-		PlayFireCue(Ctx.AscASC, Start, EndOrImpact, HitResult, EAscenduntCueRoute::LocalOnly, false);
+		// 로컬 예측 Muzzle VFX는 1P Weapon이 보이는 경우 그 Muzzle을 기준으로 한다.
+		// 서버 확정 Start는 아래 Replicated Cue에 그대로 사용하므로 실제 발사 판정과 분리된다.
+		const FVector LocalVFXStart = Ctx.Weapon
+			? Ctx.Weapon->GetMuzzleVFXTransform().GetLocation()
+			: Start;
+		PlayFireCue(Ctx.AscASC, LocalVFXStart, EndOrImpact, HitResult, EAscenduntCueRoute::LocalOnly, false);
 	}
 
 	if (Ctx.bAuthority)
@@ -673,6 +700,11 @@ bool UGA_BaseFire::FireDelivery_Hitscan(const FAscenduntFireOnceContext& Ctx)
 	return true;
 }
 
+FVector UGA_BaseFire::ComputeProjectileLaunchDir(const FAscenduntFireOnceContext& Ctx,
+	const FVector& MuzzleLoc, const FVector& AimPoint) const
+{
+	return (AimPoint - MuzzleLoc).GetSafeNormal();
+}
 
 void UGA_BaseFire::ApplyAOEDamage_Server(const FAscenduntFireOnceContext& Ctx, const FVector& ImpactPoint, AActor* DirectTarget) const
 {
@@ -849,7 +881,7 @@ bool UGA_BaseFire::FireDelivery_Projectile(const FAscenduntFireOnceContext& Ctx)
 	const bool bHasAimDecision = MakeShotImpactDecision(Ctx, ViewStart, ViewEnd, AimDecision);
 	const FVector AimPoint = bHasAimDecision ? AscFireInternal::CalcHitPointOnRay(ViewStart, ViewEnd, AimDecision.Hit) : ViewEnd;
 
-	FVector BaseDir = (AimPoint - MuzzleLoc).GetSafeNormal();
+	const FVector BaseDir = ComputeProjectileLaunchDir(Ctx, MuzzleLoc, AimPoint);
 
 	const int32 Count = FMath::Max(1, GetProjectilesPerTrigger(Ctx.ASC));
 	const float SpreadDeg = GetBaseSpreadDegSafe(Ctx.ASC);

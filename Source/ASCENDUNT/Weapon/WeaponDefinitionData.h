@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -238,6 +238,18 @@ struct FAscenduntWeaponModeStats
 	UPROPERTY(EditDefaultsOnly, Category = "Weapon|Projectile", meta = (EditCondition = "FireType == EAscenduntWeaponFireType::Projectile", EditConditionHides))
 	float ProjectileScale = 1.f;
 
+	// 곡사 사용 여부.
+	// 중력을 받는 투사체를 조준점 직선 방향으로 쏘면 항상 짧게 떨어진다.
+	// true 면 ProjectileSpeed 를 유지한 채 조준점에 도달하는 발사 각도를 계산한다.
+	// 중력은 ProjectileClass 의 ProjectileMovement 가 소유하므로, 그쪽 GravityScale 이 0 이면 무시된다.
+	UPROPERTY(EditDefaultsOnly, Category = "Weapon|Projectile", meta = (EditCondition = "FireType == EAscenduntWeaponFireType::Projectile", EditConditionHides))
+	bool bUseBallisticArc = false;
+
+	// 같은 지점에 도달하는 해가 둘일 때 높은 궤적을 고른다.
+	// 엄폐물 너머로 넘기는 곡사포는 true, 낮게 스치는 유탄은 false.
+	UPROPERTY(EditDefaultsOnly, Category = "Weapon|Projectile", meta = (EditCondition = "bUseBallisticArc", EditConditionHides))
+	bool bBallisticHighArc = true;
+
 
 	// 무효화 필드/태그에 의해 제거 가능한지(강력 투사체는 false)
 	UPROPERTY(EditDefaultsOnly, Category = "Weapon|Projectile", meta = (EditCondition = "FireType == EAscenduntWeaponFireType::Projectile", EditConditionHides))
@@ -297,8 +309,6 @@ struct FAscenduntWeaponModeStats
 	// ADS 시 FOV.
 	UPROPERTY(EditDefaultsOnly, Category = "Weapon|ADS") float ADS_FOV = 70.f;
 
-	// ADS 시 감도 스칼라. 1이면 감도에 영향 없음, 0.5면 감도가 절반으로 줄어듦.
-	UPROPERTY(EditDefaultsOnly, Category = "Weapon|ADS") float ADS_SensitivityScalar = 0.6f;
 
 
 	// ======= VFX ======
@@ -335,6 +345,23 @@ struct FAscenduntWeaponModeStats
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon|VFX") TObjectPtr<USoundCue> FireImpactWorldSoundSFX = nullptr;
 
 	// ======== Animation =========
+	/**
+	 * 발사 몽타주 재생 속도 고정값. 0 이하면 기존 동작을 쓴다.
+	 *
+	 * 기본 동작은 "몽타주 길이 / 발사 간격" 으로 재생 속도를 만들어, 연사 중에
+	 * 몽타주가 정확히 한 발 간격을 채우도록 늘리거나 줄인다. 몽타주 길이가
+	 * 발사 간격과 비슷한 무기에서는 이게 맞다.
+	 *
+	 * 하지만 곡사포처럼 발사 간격이 몽타주보다 훨씬 긴 무기는 그 계산이
+	 * 슬로모션을 만든다. (1초 몽타주 / 2.5초 간격 = 0.4배속)
+	 * 그런 무기는 여기에 1.0 처럼 고정 배속을 넣어 원래 속도로 재생시킨다.
+	 *
+	 * Hero 3P / Weapon / 1P 몽타주에 모두 동일하게 적용된다. 셋이 갈라지면
+	 * 메시끼리 어긋나기 때문에 개별 값을 두지 않는다.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Weapon|Animation", meta = (ClampMin = "0.0"))
+	float FireMontagePlayRateOverride = 0.f;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Weapon|Animation") TObjectPtr<UAnimMontage> WeaponFireMontage = nullptr;
 	UPROPERTY(EditDefaultsOnly, Category = "Weapon|Animation") TObjectPtr<UAnimMontage> WeaponReloadMontage = nullptr;
 	UPROPERTY(EditDefaultsOnly, Category = "Weapon|Animation") TObjectPtr<UAnimMontage> HeroFireMontage = nullptr;

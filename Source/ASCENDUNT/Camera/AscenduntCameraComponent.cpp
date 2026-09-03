@@ -21,6 +21,14 @@ static int32 GAscFPCameraDump = 0;
 static FAutoConsoleVariableRef CVarAscFPCameraFOV(TEXT("asc.FP.Camera.FOV"), GAscFPCameraFOV, TEXT("1인칭 전용 FOV. 음수면 BP 값 사용."), ECVF_Cheat);
 static FAutoConsoleVariableRef CVarAscFPCameraScale(TEXT("asc.FP.Camera.Scale"), GAscFPCameraScale, TEXT("1인칭 전용 스케일. 음수면 BP 값 사용."), ECVF_Cheat);
 static FAutoConsoleVariableRef CVarAscFPCameraDump(TEXT("asc.FP.Camera.Dump"), GAscFPCameraDump, TEXT("1이면 현재 1인칭 렌더 값을 로그로 출력."), ECVF_Cheat);
+
+// ADS 중에만 적용되는 1인칭 Scale/FOV 오버라이드. Hip-fire 콘솔값과 분리해서, 조준 상태와
+// 비조준 상태를 각각 따로 눈으로 맞춰볼 수 있게 한다.
+static float GAscFPCameraADSFOV = -1.f;
+static float GAscFPCameraADSScale = -1.f;
+
+static FAutoConsoleVariableRef CVarAscFPCameraADSFOV(TEXT("asc.FP.Camera.ADSFOV"), GAscFPCameraADSFOV, TEXT("ADS 중 1인칭 전용 FOV. 음수면 BP 값 사용."), ECVF_Cheat);
+static FAutoConsoleVariableRef CVarAscFPCameraADSScale(TEXT("asc.FP.Camera.ADSScale"), GAscFPCameraADSScale, TEXT("ADS 중 1인칭 전용 스케일. 음수면 BP 값 사용."), ECVF_Cheat);
 #endif
 
 UAscenduntCameraComponent::UAscenduntCameraComponent(const FObjectInitializer& ObjectInitializer)
@@ -147,28 +155,50 @@ void UAscenduntCameraComponent::GetCameraView(float DeltaTime, FMinimalViewInfo&
 	// 엔진 원본(CameraComponent.cpp)이 채워주는 1인칭 렌더링 파라미터가 여기서 누락된다.
 	// 이 세 줄이 없으면 FirstPersonFieldOfView / FirstPersonScale 을 아무리 설정해도
 	// bUseFirstPersonParameters 가 false 로 남아 렌더러에 전달되지 않는다. (경고도 에러도 없음)
-	float UseFirstPersonFOV = FirstPersonFieldOfView;
-	float UseFirstPersonScale = FirstPersonScale;
+	// Hip-fire 값과 ADS 값을 각각 계산한 뒤 ADSBlendAlpha 로 블렌드한다.
+	// ADSBlendAlpha 는 위에서 씬 FOV 줌에 쓰는 것과 같은 변수라, 조준 진입/이탈과
+	// 완전히 같은 타이밍으로 1인칭 Scale/FOV 도 전환된다.
+	float HipFirstPersonFOV = FirstPersonFieldOfView;
+	float HipFirstPersonScale = FirstPersonScale;
+	float AimFirstPersonFOV = ADSFirstPersonFieldOfView;
+	float AimFirstPersonScale = ADSFirstPersonScale;
 
 #if !UE_BUILD_SHIPPING
-	// 콘솔 오버라이드. 음수면 BP 값을 그대로 쓴다.
+	// 콘솔 오버라이드. 음수면 BP 값을 그대로 쓴다. Hip 과 ADS 를 따로 튜닝할 수 있게 나눴다.
 	if (GAscFPCameraFOV > 0.f)
 	{
-		UseFirstPersonFOV = GAscFPCameraFOV;
+		HipFirstPersonFOV = GAscFPCameraFOV;
 	}
 	if (GAscFPCameraScale > 0.f)
 	{
-		UseFirstPersonScale = GAscFPCameraScale;
+		HipFirstPersonScale = GAscFPCameraScale;
+	}
+	if (GAscFPCameraADSFOV > 0.f)
+	{
+		AimFirstPersonFOV = GAscFPCameraADSFOV;
+	}
+	if (GAscFPCameraADSScale > 0.f)
+	{
+		AimFirstPersonScale = GAscFPCameraADSScale;
 	}
 
 	if (GAscFPCameraDump != 0)
 	{
 		GAscFPCameraDump = 0;
 		UE_LOG(LogTemp, Warning,
-			TEXT("[FP-CAM] CameraComponent 에 적을 값  First Person Field Of View = %.1f   First Person Scale = %.2f   (씬 FOV = %.1f)"),
-			UseFirstPersonFOV, UseFirstPersonScale, DesiredView.FOV);
+			TEXT("[FP-CAM] Hip  First Person Field Of View = %.1f   First Person Scale = %.2f"),
+			HipFirstPersonFOV, HipFirstPersonScale);
+		UE_LOG(LogTemp, Warning,
+			TEXT("[FP-CAM] ADS  ADS First Person Field Of View = %.1f   ADS First Person Scale = %.2f   (조준 중 값을 맞출 땐 이 줄을 쓸 것)"),
+			AimFirstPersonFOV, AimFirstPersonScale);
+		UE_LOG(LogTemp, Warning,
+			TEXT("[FP-CAM] ADSBlendAlpha=%.2f  씬 FOV=%.1f"),
+			ADSBlendAlpha, DesiredView.FOV);
 	}
 #endif
+
+	const float UseFirstPersonFOV = FMath::Lerp(HipFirstPersonFOV, AimFirstPersonFOV, ADSBlendAlpha);
+	const float UseFirstPersonScale = FMath::Lerp(HipFirstPersonScale, AimFirstPersonScale, ADSBlendAlpha);
 
 	DesiredView.FirstPersonFOV = bEnableFirstPersonFieldOfView ? UseFirstPersonFOV : DesiredView.FOV;
 	DesiredView.FirstPersonScale = bEnableFirstPersonScale ? UseFirstPersonScale : 1.0f;

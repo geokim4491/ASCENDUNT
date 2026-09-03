@@ -100,7 +100,7 @@ public:
 
 	/**
 	 * Default true preserves the legacy AI flow (StartDeath -> FinishDeath immediately).
-	 * HeroInitComponent disables it so the player can enter ragdoll before FinishDeath.
+	 * HeroCharacter disables it to control Downed and ragdoll transitions before FinishDeath.
 	 */
 	void SetAutoFinishDeath(bool bInAutoFinishDeath) { bAutoFinishDeath = bInAutoFinishDeath; }
 

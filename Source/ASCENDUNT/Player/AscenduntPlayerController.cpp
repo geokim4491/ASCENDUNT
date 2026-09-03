@@ -11,6 +11,8 @@
 #include "ASCENDUNT/UI/InGame/CharacterSelection/AscCharacterSelectionWidget.h"
 #include "ASCENDUNT/UI/InGame/AscInGameHUDWidget.h"
 #include "ASCENDUNT/UI/InGame/Scoreboard/AscScoreboardWidget.h"
+#include "ASCENDUNT/UI/InGame/Pause/AscPauseMenuWidget.h"
+#include "ASCENDUNT/UI/Settings/AscSettingsWidget.h"
 #include "ASCENDUNT/UI/InGame/Hero/AscHeroHUDPanelWidget.h"
 #include "ASCENDUNT/AbilitySystem/AscenduntAbilitySystemComponent.h"
 #include "ASCENDUNT/Character/Hero/HeroInputComponent.h"
@@ -102,6 +104,15 @@ void AAscenduntPlayerController::SetupInputComponent()
         this,
         &ThisClass::HandleScoreboardReleased);
     ScoreboardReleasedBinding.bConsumeInput = false;
+
+    // ESC is bound on the persistent controller for normal gameplay.
+    // Once UIOnly is active, the focused pause/settings widget handles ESC itself.
+    FInputKeyBinding& PauseBinding = InputComponent->BindKey(
+        EKeys::Escape,
+        IE_Pressed,
+        this,
+        &ThisClass::HandlePausePressed);
+    PauseBinding.bConsumeInput = true;
 }
 
 void AAscenduntPlayerController::PreClientTravel(const FString& PendingURL, ETravelType TravelType, bool bIsSeamlessTravel)
@@ -109,6 +120,7 @@ void AAscenduntPlayerController::PreClientTravel(const FString& PendingURL, ETra
     if (IsLocalController())
     {
         HideHeroSelectionUI();
+        ClearPauseMenuWidgets();
         ClearCurrentWidget();
     }
 
@@ -212,6 +224,7 @@ void AAscenduntPlayerController::SetupUIForCurrentMap()
 void AAscenduntPlayerController::ClearCurrentWidget()
 {
     ClearScoreboardWidget();
+    ClearPauseMenuWidgets();
 
     if (ActiveInGameHUDWidget)
     {
@@ -241,7 +254,7 @@ void AAscenduntPlayerController::ShowMainMenuUI()
     }
 
     ActiveRootWidget->AddToViewport();
-    ApplyInputMode_UIOnly();
+    ApplyInputMode_UIOnly(ActiveRootWidget);
 }
 
 void AAscenduntPlayerController::ShowMatchUI()
@@ -309,6 +322,150 @@ void AAscenduntPlayerController::HandleScoreboardReleased()
     HideScoreboard();
 }
 
+void AAscenduntPlayerController::HandlePausePressed()
+{
+    if (!IsLocalController() || !IsMatchMap())
+    {
+        return;
+    }
+
+    // Hero selection owns ESC while it is focused. Do not layer the pause menu over it.
+    if (IsHeroSelectionOpen())
+    {
+        return;
+    }
+
+    if (IsPauseMenuOpen())
+    {
+        ClosePauseMenu();
+    }
+    else
+    {
+        OpenPauseMenu();
+    }
+}
+
+void AAscenduntPlayerController::OpenPauseMenu()
+{
+    if (!IsLocalController() || !IsMatchMap() || ActivePauseMenuWidget || IsHeroSelectionOpen())
+    {
+        return;
+    }
+
+    if (!PauseMenuWidgetClass)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[PauseMenu] PauseMenuWidgetClass is not assigned on %s."), *GetNameSafe(this));
+        return;
+    }
+
+    HideScoreboard();
+    StopControlledPawnMovementAndClearAbilityInput();
+
+    ActivePauseMenuWidget = CreateWidget<UAscPauseMenuWidget>(this, PauseMenuWidgetClass);
+    if (!ActivePauseMenuWidget)
+    {
+        return;
+    }
+
+    ActivePauseMenuWidget->InitializePauseMenu(this);
+    ActivePauseMenuWidget->AddToViewport(200);
+
+    bPauseMenuInputBlocked = true;
+    RefreshGameplayInputBlockedState();
+    ApplyInputMode_UIOnly(ActivePauseMenuWidget);
+}
+
+void AAscenduntPlayerController::ClosePauseMenu()
+{
+    if (!IsLocalController())
+    {
+        return;
+    }
+
+    if (ActiveSettingsWidget)
+    {
+        ActiveSettingsWidget->RemoveFromParent();
+        ActiveSettingsWidget = nullptr;
+    }
+
+    if (ActivePauseMenuWidget)
+    {
+        ActivePauseMenuWidget->RemoveFromParent();
+        ActivePauseMenuWidget = nullptr;
+    }
+
+    bPauseMenuInputBlocked = false;
+    RefreshGameplayInputBlockedState();
+
+    if (IsMatchMap())
+    {
+        ApplyInputMode_GameOnly();
+    }
+}
+
+void AAscenduntPlayerController::OpenSettingsMenu()
+{
+    if (!IsLocalController() || !IsMatchMap() || !ActivePauseMenuWidget || ActiveSettingsWidget)
+    {
+        return;
+    }
+
+    if (!SettingsWidgetClass)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Settings] SettingsWidgetClass is not assigned on %s."), *GetNameSafe(this));
+        return;
+    }
+
+    ActiveSettingsWidget = CreateWidget<UAscSettingsWidget>(this, SettingsWidgetClass);
+    if (!ActiveSettingsWidget)
+    {
+        return;
+    }
+
+    ActivePauseMenuWidget->SetVisibility(ESlateVisibility::Collapsed);
+    ActiveSettingsWidget->InitializeSettings(this);
+    ActiveSettingsWidget->AddToViewport(210);
+    ApplyInputMode_UIOnly(ActiveSettingsWidget);
+}
+
+void AAscenduntPlayerController::CloseSettingsMenu()
+{
+    if (!IsLocalController() || !ActivePauseMenuWidget)
+    {
+        return;
+    }
+
+    if (ActiveSettingsWidget)
+    {
+        ActiveSettingsWidget->RemoveFromParent();
+        ActiveSettingsWidget = nullptr;
+    }
+
+    ActivePauseMenuWidget->SetVisibility(ESlateVisibility::Visible);
+    ApplyInputMode_UIOnly(ActivePauseMenuWidget);
+}
+
+void AAscenduntPlayerController::ClearPauseMenuWidgets()
+{
+    if (ActiveSettingsWidget)
+    {
+        ActiveSettingsWidget->RemoveFromParent();
+        ActiveSettingsWidget = nullptr;
+    }
+
+    if (ActivePauseMenuWidget)
+    {
+        ActivePauseMenuWidget->RemoveFromParent();
+        ActivePauseMenuWidget = nullptr;
+    }
+
+    if (bPauseMenuInputBlocked)
+    {
+        bPauseMenuInputBlocked = false;
+        RefreshGameplayInputBlockedState();
+    }
+}
+
 TSubclassOf<UAscHeroHUDPanelWidget> AAscenduntPlayerController::ResolveHeroHUDPanelClass(const APawn* Char) const
 {
     if (!Char || !HeroRosterData)
@@ -361,20 +518,26 @@ void AAscenduntPlayerController::RefreshInGameHUDForPawn(APawn* NewPawn)
     ActiveInGameHUDWidget->NotifyOwningPawnChanged(NewPawn);
 }
 
-void AAscenduntPlayerController::ApplyInputMode_UIOnly()
+void AAscenduntPlayerController::ApplyInputMode_UIOnly(UUserWidget* FocusWidget)
 {
-    FInputModeUIOnly InputMode;
-    if (ActiveHeroSelectionWidget)
+    UUserWidget* ResolvedFocusWidget = FocusWidget;
+    if (!ResolvedFocusWidget)
     {
-        InputMode.SetWidgetToFocus(ActiveHeroSelectionWidget->TakeWidget());
+        ResolvedFocusWidget = ActiveHeroSelectionWidget;
+    }
+
+    FInputModeUIOnly InputMode;
+    if (ResolvedFocusWidget)
+    {
+        InputMode.SetWidgetToFocus(ResolvedFocusWidget->TakeWidget());
     }
     InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
     SetInputMode(InputMode);
     SetShowMouseCursor(true);
 
-    if (ActiveHeroSelectionWidget)
+    if (ResolvedFocusWidget)
     {
-        ActiveHeroSelectionWidget->SetKeyboardFocus();
+        ResolvedFocusWidget->SetKeyboardFocus();
     }
 }
 
@@ -757,7 +920,7 @@ void AAscenduntPlayerController::ShowHeroSelectionUI(EAscHeroSelectionContext Co
 
     StopControlledPawnMovementAndClearAbilityInput();
     SetHeroSelectionInputBlocked(true);
-    ApplyInputMode_UIOnly();
+    ApplyInputMode_UIOnly(ActiveHeroSelectionWidget);
 
     UE_LOG(LogTemp, Warning,
         TEXT("[HeroSelect] OpenHeroSelection Context=%d WidgetClass=%s Widget=%s"),
@@ -1025,9 +1188,9 @@ void AAscenduntPlayerController::SetHeroSelectionInputBlocked(bool bBlocked)
 
 void AAscenduntPlayerController::RefreshGameplayInputBlockedState()
 {
-    const bool bShouldBlockMoveInput = bHeroSelectionInputBlocked || bMatchGameplayBlocked || bDeathSpectating;
+    const bool bShouldBlockMoveInput = bHeroSelectionInputBlocked || bPauseMenuInputBlocked || bMatchGameplayBlocked || bDeathSpectating;
     // Death spectating must still accept mouse look. UI and post-match blockers continue to block it.
-    const bool bShouldBlockLookInput = bHeroSelectionInputBlocked || bMatchGameplayBlocked;
+    const bool bShouldBlockLookInput = bHeroSelectionInputBlocked || bPauseMenuInputBlocked || bMatchGameplayBlocked;
     const bool bShouldBlockAbilityInput = bShouldBlockMoveInput;
 
     // These APIs are counter-based, so move and look state must each transition exactly once.

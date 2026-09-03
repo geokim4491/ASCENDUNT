@@ -11,10 +11,6 @@
 #include "ASCENDUNT/Character/Hero/HeroCharacter.h"
 #include "ASCENDUNT/Character/Hero/HeroInputComponent.h"
 #include "ASCENDUNT/Character/Hero/HeroPawnData.h"
-#include "ASCENDUNT/Character/Hero/PVE/AscPvEDownedComponent.h"
-#include "ASCENDUNT/GameModes/PVE/AscPvEGameMode.h"
-#include "ASCENDUNT/GameModes/PVE/AscPvEGameState.h"
-#include "ASCENDUNT/GameModes/PVP/MatchGameMode.h"
 #include "ASCENDUNT/Player/AscenduntPlayerState.h"
 #include "ASCENDUNT/Weapon/AscenduntWeapon.h"
 #include "ASCENDUNT/Weapon/WeaponEquipmentComponent.h"
@@ -28,57 +24,23 @@ void UHeroInitComponent::BeginPlay()
     Super::BeginPlay();
 
     bDeinitialized = false;
-    OwnerPawn = Cast<AHeroCharacter>(GetOwner());
 
-    // Evaluate() re-reads the current object graph, so values that arrived before BeginPlay
-    // are handled exactly the same as values that arrive later through OnRep/lifecycle events.
     Evaluate();
 }
 
-void UHeroInitComponent::HandlePlayerStateChanged(AAscenduntPlayerState* NewPS)
+void UHeroInitComponent::NotifyPlayerStateChanged()
 {
-    if (bDeinitialized)
-    {
-        return;
-    }
-
-    // OnRep_PlayerState can run before this component's BeginPlay. GetOwner() is already
-    // valid for a default subobject, so never make binding depend on BeginPlay ordering.
-    if (!OwnerPawn.IsValid())
-    {
-        OwnerPawn = Cast<AHeroCharacter>(GetOwner());
-    }
-
-    if (CachedPS.Get() != NewPS)
-    {
-        UnbindFromPlayerState();
-        CachedPS = NewPS;
-        CachedASC = nullptr;
-    }
-
-    if (CachedPS.IsValid())
-    {
-        CachedASC = CachedPS->GetAscenduntAbilitySystemComponent();
-        BindToPlayerState(CachedPS.Get());
-    }
-
     Evaluate();
 }
 
 void UHeroInitComponent::NotifyControllerChanged()
 {
-    if (!bDeinitialized)
-    {
-        Evaluate();
-    }
+    Evaluate();
 }
 
 void UHeroInitComponent::NotifyInputComponentReady()
 {
-    if (!bDeinitialized)
-    {
-        Evaluate();
-    }
+    Evaluate();
 }
 
 bool UHeroInitComponent::IsGameplayReady() const
@@ -88,36 +50,28 @@ bool UHeroInitComponent::IsGameplayReady() const
 
 void UHeroInitComponent::Evaluate()
 {
-    if (bDeinitialized || IsGameplayReady())
-    {
-        return;
-    }
-
-    // Replication callbacks can run before this component reaches BeginPlay. Those callbacks
-    // may establish idempotent bindings, but gameplay initialization itself begins only after
-    // the component lifecycle is ready. BeginPlay() is the guaranteed wake-up for this gate.
-    if (!HasBegunPlay())
+    if (bDeinitialized)
     {
         return;
     }
 
     RefreshDependencies();
 
-    if (!OwnerPawn.IsValid())
+    // 초기화 작업은 BeginPlay 이후에만 진행.
+    if (!HasBegunPlay() || IsGameplayReady() || !OwnerPawn.IsValid() || !CachedPS.IsValid())
     {
         return;
     }
 
-    // Sequential if-statements intentionally allow one wake-up event to advance through
-    // every state whose prerequisites were already prepared out of order.
+    // 조건 준비되어있으면, 쭉 진행함.
     if (!CurrentState.IsValid())
     {
-        if (!CanEnterSpawned())
+        if (!CanEnterSpawned() || !ValidateStaticConfiguration())
         {
             return;
         }
 
-        EnterSpawned();
+        CurrentState = AscenduntGameplayTags::InitState_Spawned;
     }
 
     if (CurrentState == AscenduntGameplayTags::InitState_Spawned)
@@ -137,7 +91,7 @@ void UHeroInitComponent::Evaluate()
             return;
         }
 
-        EnterGameplayReady();
+        TryEnterGameplayReady();
     }
 }
 
@@ -153,8 +107,6 @@ void UHeroInitComponent::RefreshDependencies()
         return;
     }
 
-    // PlayerState is the source of truth. Do not cache replicated "ready" booleans;
-    // every Evaluate() reads the current object graph again.
     AAscenduntPlayerState* CurrentPS = OwnerPawn->GetPlayerState<AAscenduntPlayerState>();
     if (CachedPS.Get() != CurrentPS)
     {
@@ -165,7 +117,6 @@ void UHeroInitComponent::RefreshDependencies()
 
     if (CachedPS.IsValid())
     {
-        CachedASC = CachedPS->GetAscenduntAbilitySystemComponent();
         BindToPlayerState(CachedPS.Get());
     }
     else
@@ -178,11 +129,6 @@ void UHeroInitComponent::RefreshDependencies()
 
 bool UHeroInitComponent::CanEnterSpawned() const
 {
-    if (!OwnerPawn.IsValid() || !CachedPS.IsValid())
-    {
-        return false;
-    }
-
     const UHeroPawnData* PawnData = CachedPS->GetPawnData();
     if (!PawnData)
     {
@@ -198,22 +144,9 @@ bool UHeroInitComponent::CanEnterSpawned() const
         return false;
     }
 
-    // During hero replacement the new Pawn can temporarily observe the previous PawnData.
-    // This is an asynchronous wait, not a configuration failure.
+    // 캐릭터 교체할 때, Pawn이랑 PawnData의 Pawn이 다른 순서로 복제될 수 있어서
+    // 일치하지 않으면 나중에 PawnData 변경 이벤트에서 다시 확인함.
     return OwnerPawn->IsA(PawnData->PawnClass);
-}
-
-void UHeroInitComponent::EnterSpawned()
-{
-    CurrentState = AscenduntGameplayTags::InitState_Spawned;
-
-    bStaticConfigurationChecked = true;
-    bStaticConfigurationValid = ValidateStaticConfiguration();
-
-    UE_LOG(LogTemp, Log,
-        TEXT("[HeroInit] %s -> Spawned (Config=%s)"),
-        *GetNameSafe(OwnerPawn.Get()),
-        bStaticConfigurationValid ? TEXT("Valid") : TEXT("Invalid"));
 }
 
 bool UHeroInitComponent::ValidateStaticConfiguration()
@@ -225,16 +158,16 @@ bool UHeroInitComponent::ValidateStaticConfiguration()
     const UHeroPawnData* PawnData = CachedPS->GetPawnData();
 
     auto RequireObject = [this, &bValid](const auto* Object, const TCHAR* Name)
-    {
-        if (!Object)
         {
-            UE_LOG(LogTemp, Error,
-                TEXT("[HeroInit] Missing static dependency '%s'. Pawn=%s"),
-                Name,
-                *GetNameSafe(OwnerPawn.Get()));
-            bValid = false;
-        }
-    };
+            if (!Object)
+            {
+                UE_LOG(LogTemp, Error,
+                    TEXT("[HeroInit] Missing static dependency '%s'. Pawn=%s"),
+                    Name,
+                    *GetNameSafe(OwnerPawn.Get()));
+                bValid = false;
+            }
+        };
 
     RequireObject(PawnData, TEXT("PawnData"));
     RequireObject(OwnerPawn->GetHeroInputComponent(), TEXT("HeroInputComponent"));
@@ -247,28 +180,13 @@ bool UHeroInitComponent::ValidateStaticConfiguration()
     if (PawnData)
     {
         RequireObject(PawnData->InputConfig.Get(), TEXT("PawnData.InputConfig"));
-        if (!PawnData->DefaultCameraMode)
-        {
-            UE_LOG(LogTemp, Error,
-                TEXT("[HeroInit] Missing static dependency 'PawnData.DefaultCameraMode'. Pawn=%s PawnData=%s"),
-                *GetNameSafe(OwnerPawn.Get()),
-                *GetNameSafe(PawnData));
-            bValid = false;
-        }
+        RequireObject(PawnData->DefaultCameraMode.Get(), TEXT("PawnData.DefaultCameraMode"));
     }
 
     if (USkeletalMeshComponent* MeshComp = OwnerPawn->GetMesh())
     {
-        if (!MeshComp->GetSkeletalMeshAsset() || !MeshComp->GetAnimClass())
-        {
-            UE_LOG(LogTemp, Error,
-                TEXT("[HeroInit] Main animation configuration is incomplete. Pawn=%s Mesh=%s SkeletalMesh=%s AnimClass=%s"),
-                *GetNameSafe(OwnerPawn.Get()),
-                *GetNameSafe(MeshComp),
-                *GetNameSafe(MeshComp->GetSkeletalMeshAsset()),
-                *GetNameSafe(MeshComp->GetAnimClass()));
-            bValid = false;
-        }
+        RequireObject(MeshComp->GetSkeletalMeshAsset(), TEXT("Mesh.SkeletalMeshAsset"));
+        RequireObject(MeshComp->GetAnimClass(), TEXT("Mesh.AnimClass"));
     }
 
     return bValid;
@@ -276,19 +194,9 @@ bool UHeroInitComponent::ValidateStaticConfiguration()
 
 bool UHeroInitComponent::TryEnterGASInitialized()
 {
-    if (!bStaticConfigurationChecked || !bStaticConfigurationValid)
-    {
-        return false;
-    }
-
-    check(OwnerPawn.IsValid());
-    check(CachedPS.IsValid());
-
     UAscenduntAbilitySystemComponent* ASC = CachedPS->GetAscenduntAbilitySystemComponent();
     if (!ASC)
     {
-        // ASC is a PlayerState default subobject. Once PlayerState exists, a null ASC is
-        // a structural/configuration failure rather than a replication dependency.
         UE_LOG(LogTemp, Error,
             TEXT("[HeroInit] PlayerState exists but ASC is null. Pawn=%s PS=%s"),
             *GetNameSafe(OwnerPawn.Get()),
@@ -321,29 +229,23 @@ bool UHeroInitComponent::TryEnterGASInitialized()
         return false;
     }
 
-    // GAS montage tasks must target the gameplay mesh rather than auxiliary meshes.
     ASC->AbilityActorInfo->SkeletalMeshComponent = OwnerPawn->GetMesh();
 
+    // AbilitySet은 서버에서 부여함.
     if (OwnerPawn->HasAuthority())
     {
-        // The server owns AbilitySet application. Failure here is not something a timer can
-        // fix: the PlayerState/ASC/PawnData relationship is already fully available.
         if (!CachedPS->ApplyPawnDataAbilitySets())
         {
             return false;
         }
+
+        CachedPS->InitializeCombatForCurrentPawnData();
     }
+    // 클라는 PS에 PawnData가 적용되면 다음으로 진행
     else if (!CachedPS->IsPawnDataApplied())
     {
-        // Asynchronous replicated completion marker. OnRep_AppliedPawnData wakes Evaluate().
+        // OnRep_AppliedPawnData에서 다시 평가.
         return false;
-    }
-
-    if (OwnerPawn->HasAuthority())
-    {
-        // Contribution coefficients and the persistent UltimateSet are hero data, so bind them
-        // only after this PawnData has actually been applied to the ASC.
-        CachedPS->InitializeCombatForCurrentPawnData();
     }
 
     if (!bOnSpawnAbilitiesActivatedForAvatar)
@@ -354,21 +256,13 @@ bool UHeroInitComponent::TryEnterGASInitialized()
 
     CurrentState = AscenduntGameplayTags::InitState_GASInitialized;
 
-    UE_LOG(LogTemp, Log,
-        TEXT("[HeroInit] %s -> GASInitialized"),
-        *GetNameSafe(OwnerPawn.Get()));
+    UE_LOG(LogTemp, Log, TEXT("[HeroInit] %s -> GASInitialized"), *GetNameSafe(OwnerPawn.Get()));
 
     return true;
 }
 
 void UHeroInitComponent::PrepareGameplayDependencies()
 {
-    check(CurrentState == AscenduntGameplayTags::InitState_GASInitialized);
-    check(OwnerPawn.IsValid());
-    check(CachedASC.IsValid());
-
-    // Preparation may happen in any order, but user control is not committed until every
-    // required dependency below reports ready.
     if (!bAnimationInitialized)
     {
         bAnimationInitialized = OwnerPawn->TryInitializeAnimationForGameplay();
@@ -381,45 +275,22 @@ void UHeroInitComponent::PrepareGameplayDependencies()
             bHealthCompInitialized = HealthComp->InitializeWithAbilitySystem(CachedASC.Get());
             if (bHealthCompInitialized)
             {
-                BindToHealthComponent();
+                OwnerPawn->BindHealthEvents();
             }
         }
     }
 
-    if (UWeaponEquipmentComponent* EquipmentComp = OwnerPawn->GetWeaponEquipmentComponent())
+    if (OwnerPawn->HasAuthority())
     {
-        if (OwnerPawn->HasAuthority())
+        if (UWeaponEquipmentComponent* EquipmentComp = OwnerPawn->GetWeaponEquipmentComponent())
         {
-            EquipmentComp->ServerEnsureDefaultWeapons();
-
-            if (!EquipmentComp->GetCurrentWeapon() && EquipmentComp->GetWeaponInventory().Num() > 0)
-            {
-                // Visual-only companion slots are rejected by ServerEquipWeapon(); try each
-                // inventory entry until the actual gameplay weapon becomes CurrentWeapon.
-                for (AAscenduntWeapon* Weapon : EquipmentComp->GetWeaponInventory())
-                {
-                    EquipmentComp->ServerEquipWeapon(Weapon);
-                    if (EquipmentComp->GetCurrentWeapon())
-                    {
-                        break;
-                    }
-                }
-            }
+            EquipmentComp->ServerInitializeDefaultLoadout();
         }
     }
 }
 
 bool UHeroInitComponent::CanEnterGameplayReady() const
 {
-    if (CurrentState != AscenduntGameplayTags::InitState_GASInitialized || !bStaticConfigurationValid)
-    {
-        return false;
-    }
-
-    check(OwnerPawn.IsValid());
-    check(CachedPS.IsValid());
-    check(CachedASC.IsValid());
-
     if (!bAnimationInitialized || !bHealthCompInitialized)
     {
         return false;
@@ -431,12 +302,14 @@ bool UHeroInitComponent::CanEnterGameplayReady() const
         return false;
     }
 
+    // 로컬이면 입력, 카메라까지 초기화.
+    // 여기선 준비만 하고 초기화는 GameplayReady에서 한번에 함.
+    // 하나씩 준비되는 것처럼 보이게 안하고 한번에 준비된 상태를 보이게 하려고 이렇게 함.
     if (!RequiresLocalPlayerInitialization())
     {
         return true;
     }
 
-    // Local user-facing state is committed only after all local prerequisites exist.
     if (!OwnerPawn->IsLocallyControlled() || !OwnerPawn->InputComponent)
     {
         return false;
@@ -468,11 +341,6 @@ bool UHeroInitComponent::CanInitializeLocalCamera() const
 
 bool UHeroInitComponent::InitializeLocalCamera()
 {
-    if (bCameraInitialized)
-    {
-        return true;
-    }
-
     if (!CanInitializeLocalCamera())
     {
         return false;
@@ -486,11 +354,10 @@ bool UHeroInitComponent::InitializeLocalCamera()
         HeroCamera,
         &UHeroCameraComponent::DetermineCameraMode);
 
-    bCameraInitialized = CameraComponent->DetermineCameraModeDelegate.IsBound();
-    return bCameraInitialized;
+    return CameraComponent->DetermineCameraModeDelegate.IsBound();
 }
 
-bool UHeroInitComponent::EnterGameplayReady()
+bool UHeroInitComponent::TryEnterGameplayReady()
 {
     if (!OwnerPawn.IsValid())
     {
@@ -499,48 +366,32 @@ bool UHeroInitComponent::EnterGameplayReady()
 
     const bool bNeedsLocalInitialization = RequiresLocalPlayerInitialization();
 
-    // Movement attributes are prepared before input is enabled, so the first user movement
-    // already observes the ASC-driven movement values.
-    OwnerPawn->HandleGameplayReady();
+    OwnerPawn->InitializeGameplayBindings();
 
     if (bNeedsLocalInitialization)
     {
         if (!InitializeLocalCamera())
         {
-            OwnerPawn->HandleGameplayDeinitialized();
+            OwnerPawn->UninitializeGameplayBindings();
             return false;
         }
 
-        if (!bInputCompInitialized)
-        {
-            UHeroInputComponent* InputComp = OwnerPawn->GetHeroInputComponent();
-            bInputCompInitialized = InputComp &&
-                InputComp->InitializePlayerInput(OwnerPawn->InputComponent);
-        }
-
-        if (!bInputCompInitialized)
+        UHeroInputComponent* InputComp = OwnerPawn->GetHeroInputComponent();
+        if (!InputComp || !InputComp->InitializePlayerInput(OwnerPawn->InputComponent))
         {
             if (UAscenduntCameraComponent* CameraComponent =
                 UAscenduntCameraComponent::FindCameraComponent(OwnerPawn.Get()))
             {
                 CameraComponent->DetermineCameraModeDelegate.Unbind();
             }
-            bCameraInitialized = false;
-            OwnerPawn->HandleGameplayDeinitialized();
+            OwnerPawn->UninitializeGameplayBindings();
             return false;
         }
-    }
-    else
-    {
-        bInputCompInitialized = true;
-        bCameraInitialized = true;
     }
 
     CurrentState = AscenduntGameplayTags::InitState_GameplayReady;
 
-    UE_LOG(LogTemp, Log,
-        TEXT("[HeroInit] %s -> GameplayReady"),
-        *GetNameSafe(OwnerPawn.Get()));
+    UE_LOG(LogTemp, Log, TEXT("[HeroInit] %s -> GameplayReady"), *GetNameSafe(OwnerPawn.Get()));
 
     OnGameplayReady.Broadcast(OwnerPawn.Get());
     return true;
@@ -558,8 +409,8 @@ bool UHeroInitComponent::RequiresLocalPlayerInitialization() const
         return true;
     }
 
-    // Role/Controller references can lag behind PlayerState. Matching the local PC's
-    // PlayerState prevents an owning Pawn from being misclassified as a simulated proxy.
+    // ROLE이나 Controller 연결이 늦으면, 소유 Pawn도 아직 로컬로 판별되지 않을 수 있음.
+    // 로컬 PC의 PS와 비교해서 로컬인지 판정.
     if (CachedPS.IsValid())
     {
         if (const UWorld* World = OwnerPawn->GetWorld())
@@ -581,25 +432,20 @@ bool UHeroInitComponent::RequiresLocalPlayerInitialization() const
 
 void UHeroInitComponent::BindToPlayerState(AAscenduntPlayerState* PS)
 {
-    if (!PS || !OwnerPawn.IsValid())
-    {
-        return;
-    }
+    if (!PS) return;
 
-    // Idempotent by design. "CachedPS == PS" does not imply these bindings exist: an
-    // earlier call may have happened before the component had all local prerequisites.
     if (!PawnDataAvailHandle.IsValid())
     {
         PawnDataAvailHandle = PS->OnPawnDataAvailable.AddUObject(
             this,
-            &UHeroInitComponent::HandlePawnDataAvailable);
+            &UHeroInitComponent::Evaluate);
     }
 
     if (!PawnDataAppliedHandle.IsValid())
     {
         PawnDataAppliedHandle = PS->OnPawnDataApplied.AddUObject(
             this,
-            &UHeroInitComponent::HandlePawnDataApplied);
+            &UHeroInitComponent::Evaluate);
     }
 }
 
@@ -621,19 +467,9 @@ void UHeroInitComponent::UnbindFromPlayerState()
     PawnDataAppliedHandle.Reset();
 }
 
-void UHeroInitComponent::HandlePawnDataAvailable()
-{
-    Evaluate();
-}
-
-void UHeroInitComponent::HandlePawnDataApplied()
-{
-    Evaluate();
-}
-
 void UHeroInitComponent::BindToWeaponEquipment()
 {
-    if (!OwnerPawn.IsValid() || OwnerPawn->GetNetMode() != NM_Client)
+    if (OwnerPawn->GetNetMode() != NM_Client)
     {
         return;
     }
@@ -655,7 +491,7 @@ void UHeroInitComponent::BindToWeaponEquipment()
     {
         WeaponInventoryChangedHandle = EquipmentComp->OnWeaponInventoryChanged.AddUObject(
             this,
-            &UHeroInitComponent::HandleWeaponInventoryChanged);
+            &UHeroInitComponent::Evaluate);
     }
 }
 
@@ -689,107 +525,6 @@ void UHeroInitComponent::UnbindFromWeaponEquipment()
 void UHeroInitComponent::HandleCurrentWeaponChanged(AAscenduntWeapon* NewWeapon, AAscenduntWeapon* PrevWeapon)
 {
     Evaluate();
-}
-
-void UHeroInitComponent::HandleWeaponInventoryChanged()
-{
-    Evaluate();
-}
-
-void UHeroInitComponent::BindToHealthComponent()
-{
-    if (bDeathEventBound || !OwnerPawn.IsValid())
-    {
-        return;
-    }
-
-    if (UAscenduntHealthComponent* HealthComp = OwnerPawn->GetAscenduntHealthComponent())
-    {
-        HealthComp->SetAutoFinishDeath(false);
-        HealthComp->OnDeathStarted.AddUniqueDynamic(this, &ThisClass::HandleDeathStarted);
-        HealthComp->OnDeathFinished.AddUniqueDynamic(this, &ThisClass::HandleDeathFinished);
-        bDeathEventBound = true;
-    }
-}
-
-void UHeroInitComponent::UnbindFromHealthComponent()
-{
-    AHeroCharacter* Pawn = OwnerPawn.Get();
-    if (!Pawn)
-    {
-        Pawn = Cast<AHeroCharacter>(GetOwner());
-    }
-
-    if (Pawn)
-    {
-        if (UAscenduntHealthComponent* HealthComp = Pawn->GetAscenduntHealthComponent())
-        {
-            HealthComp->OnDeathStarted.RemoveDynamic(this, &ThisClass::HandleDeathStarted);
-            HealthComp->OnDeathFinished.RemoveDynamic(this, &ThisClass::HandleDeathFinished);
-            HealthComp->SetAutoFinishDeath(true);
-        }
-    }
-
-    bDeathEventBound = false;
-}
-
-void UHeroInitComponent::HandleDeathStarted(AActor* OwningActor)
-{
-    AHeroCharacter* Pawn = OwnerPawn.Get();
-    if (!Pawn || OwningActor != Pawn)
-    {
-        return;
-    }
-
-    const bool bIsPvE = GetWorld() && GetWorld()->GetGameState<AAscPvEGameState>() != nullptr;
-    if (bIsPvE)
-    {
-        if (Pawn->HasAuthority())
-        {
-            if (UAscPvEDownedComponent* DownedComp = Pawn->GetPvEDownedComponent())
-            {
-                DownedComp->EnterDowned();
-            }
-        }
-        return;
-    }
-
-    Pawn->EnterDeathRagdoll();
-
-    if (Pawn->HasAuthority())
-    {
-        if (UAscenduntHealthComponent* HealthComp = Pawn->GetAscenduntHealthComponent())
-        {
-            HealthComp->FinishDeath();
-        }
-    }
-}
-
-void UHeroInitComponent::HandleDeathFinished(AActor* OwningActor)
-{
-    AHeroCharacter* Pawn = OwnerPawn.Get();
-    if (!Pawn || OwningActor != Pawn)
-    {
-        return;
-    }
-
-    Pawn->EnterDeathRagdoll();
-
-    if (!Pawn->HasAuthority())
-    {
-        return;
-    }
-
-    if (AAscPvEGameMode* PvEGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AAscPvEGameMode>() : nullptr)
-    {
-        PvEGameMode->HandleHeroFullDeath(Pawn);
-        return;
-    }
-
-    if (AMatchGameMode* MatchGM = GetWorld() ? GetWorld()->GetAuthGameMode<AMatchGameMode>() : nullptr)
-    {
-        MatchGM->HandleHeroDeath(Pawn);
-    }
 }
 
 void UHeroInitComponent::DeinitializeForPawnReplacement(bool bPreserveHeroState)
@@ -840,7 +575,7 @@ void UHeroInitComponent::DeinitializePawn(bool bPreserveHeroState)
 
     if (Pawn)
     {
-        Pawn->HandleGameplayDeinitialized();
+        Pawn->UninitializeGameplayBindings();
 
         if (UHeroInputComponent* InputComp = Pawn->GetHeroInputComponent())
         {
@@ -853,7 +588,7 @@ void UHeroInitComponent::DeinitializePawn(bool bPreserveHeroState)
             CameraComponent->DetermineCameraModeDelegate.Unbind();
         }
 
-        UnbindFromHealthComponent();
+        Pawn->UnbindHealthEvents();
 
         if (UAscenduntHealthComponent* HealthComp = Pawn->GetAscenduntHealthComponent())
         {
@@ -890,14 +625,9 @@ void UHeroInitComponent::ResetRuntimeState()
     CachedASC = nullptr;
     OwnerPawn = nullptr;
 
-    bStaticConfigurationChecked = false;
-    bStaticConfigurationValid = false;
     bAnimationInitialized = false;
     bHealthCompInitialized = false;
-    bInputCompInitialized = false;
-    bCameraInitialized = false;
     bOnSpawnAbilitiesActivatedForAvatar = false;
-    bDeathEventBound = false;
 
     CurrentState = FGameplayTag::EmptyTag;
 }

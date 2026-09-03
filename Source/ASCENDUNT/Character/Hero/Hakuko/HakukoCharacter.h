@@ -24,8 +24,8 @@ public:
 	UHakukoFoxComponent* GetHakukoFoxComponent() const;
 
 	virtual bool GetWeaponAOEParameters(float& OutRadius, float& OutDamageCoefficient, bool& bOutDebugDrawRadius, float& OutDebugDrawDuration) const override;
-	virtual void HandleGameplayReady() override;
-	virtual void HandleGameplayDeinitialized() override;
+	virtual void InitializeGameplayBindings() override;
+	virtual void UninitializeGameplayBindings() override;
 
 private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Hakuko", meta=(AllowPrivateAccess="true"))

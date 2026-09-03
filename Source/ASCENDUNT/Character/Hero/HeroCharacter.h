@@ -114,11 +114,15 @@ public:
 
 	bool IsAnimationInitializedForGameplay() const { return bAnimationInitializedForGameplay; }
 
-	/** Called by HeroInitComponent during the final GameplayReady commit after all prerequisites are guaranteed. */
-	virtual void HandleGameplayReady();
+	/** 입력 활성화 전에 이동 Attribute와 영웅별 게임플레이 기능을 연결한다. */
+	virtual void InitializeGameplayBindings();
 
-	/** Called by HeroInitComponent before the shared ASC ActorInfo is released. */
-	virtual void HandleGameplayDeinitialized();
+	/** 초기화 실패 또는 Pawn 교체 시 게임플레이 연결을 해제한다. */
+	virtual void UninitializeGameplayBindings();
+
+	// HealthComponent의 ASC 연결 후 구독하고, 연결 해제 전에 구독을 해제한다.
+	void BindHealthEvents();
+	void UnbindHealthEvents();
 
 	//~AActor interface
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -164,7 +168,6 @@ protected:
 	bool LinkAnimClassLayers();
 
 private:
-	void BindMovementAttributes();
 	void UnbindMovementAttributes();
 	void RefreshMovementFromAttributes();
 	void HandleBaseMoveSpeedChanged(const FOnAttributeChangeData& ChangeData);
@@ -172,7 +175,14 @@ private:
 	void HandleJumpZVelocityChanged(const FOnAttributeChangeData& ChangeData);
 	void HandleAirControlChanged(const FOnAttributeChangeData& ChangeData);
 
+	UFUNCTION()
+	void HandleDeathStarted(AActor* OwningActor);
+
+	UFUNCTION()
+	void HandleDeathFinished(AActor* OwningActor);
+
 	bool bAnimationInitializedForGameplay = false;
+	bool bDeathEventBound = false;
 	bool bDeathRagdollActive = false;
 	bool bDownedMovementOverride = false;
 	float DownedMovementSpeedOverride = 0.0f;

@@ -65,6 +65,17 @@ public:
 	FAscFPWeaponPose SprintPose = { FVector(20.f, 8.f, -26.f), FRotator(-40.f, -20.f, 20.f) };
 
 	/**
+	 * ADS(정조준) 자세. 조준기가 화면 중앙 크로스헤어에 오도록 맞춘다.
+	 *
+	 * Ready/Sprint 블렌드 결과 위에 최우선으로 덧씌운다. bIsAiming 은 GA_ADS 가
+	 * UHeroFirstPersonComponent::SetADSActive() 로 세팅한 값을 매 프레임 이 클래스가
+	 * 읽어온다(다른 상태들과 같은 pull 방식). ADS 중에는 SprintPose 자체를 억제하므로
+	 * 조준하며 달려도 자세가 충돌하지 않는다.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FirstPerson|Pose")
+	FAscFPWeaponPose ADSPose = { FVector(18.f, 0.f, -6.f), FRotator::ZeroRotator };
+
+	/**
 	 * 달릴 때 SprintPose 로 총을 내릴지 여부.
 	 *
 	 * 끄면 항상 ReadyPose 만 쓴다. 지금 판정이 이동 속도 기반이라 걷기와 달리기 경계에서
@@ -90,6 +101,10 @@ public:
 	UPROPERTY(BlueprintReadWrite, Category = "FirstPerson|Pose")
 	bool bForceReadyPose = false;
 
+	/** ADS 진입/이탈 보간 속도. 조준은 총 올리기(PoseBlendSpeed)보다 빠릿해야 손맛이 산다. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FirstPerson|Pose", meta = (ClampMin = "0.1"))
+	float ADSBlendSpeed = 12.f;
+
 	//~ 스웨이 / 바빙 / 반동 ------------------------------------------------
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FirstPerson|Sway")
 	float SwayTranslationScale = 0.35f;
@@ -104,6 +119,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FirstPerson|Sway")
 	float SwayInterpSpeed = 9.f;
 
+	/** 조준 중 스웨이 진폭에 곱해지는 배율. 0 이면 조준 중 스웨이가 완전히 사라진다. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FirstPerson|Sway", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SwayAimingScale = 0.3f;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FirstPerson|Bob")
 	float BobAmplitude = 1.1f;
 
@@ -113,6 +132,10 @@ public:
 	/** 이 속도에서 바빙 진폭이 100% 가 된다. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FirstPerson|Bob", meta = (ClampMin = "1.0"))
 	float BobSpeedReference = 600.f;
+
+	/** 조준 중 바빙 진폭에 곱해지는 배율. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FirstPerson|Bob", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float BobAimingScale = 0.25f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FirstPerson|Recoil")
 	float RecoilRecoverySpeed = 14.f;
@@ -141,6 +164,10 @@ public:
 	/** 0 = Ready, 1 = Sprint. ABP 에서 상체 애님을 같이 블렌드하고 싶을 때 쓴다. */
 	UPROPERTY(BlueprintReadOnly, Category = "FirstPerson")
 	float SprintAlpha = 0.f;
+
+	/** 0 = 비조준, 1 = ADS. ABP 에서 상체 애님이나 확산(스프레드) 연출에 같이 쓸 수 있다. */
+	UPROPERTY(BlueprintReadOnly, Category = "FirstPerson")
+	float AimAlpha = 0.f;
 
 	UPROPERTY(BlueprintReadOnly, Category = "FirstPerson")
 	float GroundSpeed = 0.f;

@@ -329,6 +329,31 @@ void UWeaponEquipmentComponent::ServerEnsureDefaultWeapons()
 	ServerSpawnDefaultWeapons();
 }
 
+void UWeaponEquipmentComponent::ServerInitializeDefaultLoadout()
+{
+	AActor* Owner = GetOwner();
+	if (!Owner || !Owner->HasAuthority())
+	{
+		return;
+	}
+
+	ServerEnsureDefaultWeapons();
+	if (CurrentWeapon)
+	{
+		return;
+	}
+
+	// 비주얼 전용 보조 무기는 ServerEquipWeapon에서 제외된다.
+	for (AAscenduntWeapon* Weapon : WeaponInventory)
+	{
+		ServerEquipWeapon(Weapon);
+		if (CurrentWeapon)
+		{
+			break;
+		}
+	}
+}
+
 void UWeaponEquipmentComponent::HideWeaponMesh(AAscenduntWeapon* Weapon)
 {
 	if (!Weapon) return;

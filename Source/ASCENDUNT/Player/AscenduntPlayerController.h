@@ -12,6 +12,8 @@ class AAscenduntPlayerState;
 class UAscCharacterSelectionWidget;
 class UAscInGameHUDWidget;
 class UAscScoreboardWidget;
+class UAscPauseMenuWidget;
+class UAscSettingsWidget;
 class UAscHeroHUDPanelWidget;
 class UHeroInputComponent;
 class UAscHeroRosterData;
@@ -133,6 +135,26 @@ public:
     UFUNCTION(BlueprintPure, Category = "Ascendunt|UI|Scoreboard")
     UAscScoreboardWidget* GetActiveScoreboardWidget() const { return ActiveScoreboardWidget; }
 
+    /** Local-only ESC menu. Does not pause the dedicated server world. */
+    UFUNCTION(BlueprintCallable, Category = "Ascendunt|UI|Pause")
+    void OpenPauseMenu();
+
+    UFUNCTION(BlueprintCallable, Category = "Ascendunt|UI|Pause")
+    void ClosePauseMenu();
+
+    UFUNCTION(BlueprintPure, Category = "Ascendunt|UI|Pause")
+    bool IsPauseMenuOpen() const { return ActivePauseMenuWidget != nullptr; }
+
+    UFUNCTION(BlueprintCallable, Category = "Ascendunt|UI|Settings")
+    void OpenSettingsMenu();
+
+    /** Returns from settings to the pause menu. */
+    UFUNCTION(BlueprintCallable, Category = "Ascendunt|UI|Settings")
+    void CloseSettingsMenu();
+
+    UFUNCTION(BlueprintPure, Category = "Ascendunt|UI|Settings")
+    bool IsSettingsMenuOpen() const { return ActiveSettingsWidget != nullptr; }
+
     const UAscHeroRosterData* GetHeroRosterData() const { return HeroRosterData; }
 
     /** May be called by the ESC menu during any match phase, including Playing. */
@@ -185,6 +207,14 @@ protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Ascendunt|UI|Scoreboard")
     TSubclassOf<UAscScoreboardWidget> ScoreboardWidgetClass;
 
+    /** WBP_PauseMenu derived from UAscPauseMenuWidget. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Ascendunt|UI|Pause")
+    TSubclassOf<UAscPauseMenuWidget> PauseMenuWidgetClass;
+
+    /** WBP_Settings derived from UAscSettingsWidget. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Ascendunt|UI|Settings")
+    TSubclassOf<UAscSettingsWidget> SettingsWidgetClass;
+
     /** Shared roster used by the common HUD for portraits and optional hero panels. */
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Ascendunt|UI")
     TObjectPtr<const UAscHeroRosterData> HeroRosterData;
@@ -204,6 +234,12 @@ protected:
 
     UPROPERTY(Transient)
     TObjectPtr<UAscScoreboardWidget> ActiveScoreboardWidget;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UAscPauseMenuWidget> ActivePauseMenuWidget;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UAscSettingsWidget> ActiveSettingsWidget;
 
     UPROPERTY(Transient)
     TObjectPtr<UAscCharacterSelectionWidget> ActiveHeroSelectionWidget;
@@ -226,9 +262,11 @@ protected:
     void ClearScoreboardWidget();
     void HandleScoreboardPressed();
     void HandleScoreboardReleased();
+    void HandlePausePressed();
+    void ClearPauseMenuWidgets();
     void RefreshInGameHUDForPawn(APawn* NewPawn);
     TSubclassOf<UAscHeroHUDPanelWidget> ResolveHeroHUDPanelClass(const APawn* Pawn) const;
-    void ApplyInputMode_UIOnly();
+    void ApplyInputMode_UIOnly(UUserWidget* FocusWidget = nullptr);
     void ApplyInputMode_GameOnly();
     void StopControlledPawnMovementAndClearAbilityInput();
     void SetHeroSelectionInputBlocked(bool bBlocked);
@@ -275,6 +313,7 @@ protected:
 
     bool bDeathSpectating = false;
     bool bHeroSelectionInputBlocked = false;
+    bool bPauseMenuInputBlocked = false;
     bool bMatchGameplayBlocked = false;
     bool bMoveInputCurrentlyBlocked = false;
     bool bLookInputCurrentlyBlocked = false;

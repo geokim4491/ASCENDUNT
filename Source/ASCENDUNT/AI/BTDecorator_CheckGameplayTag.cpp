@@ -1,4 +1,4 @@
-#include "BTDecorator_CheckGameplayTag.h"
+﻿#include "BTDecorator_CheckGameplayTag.h"
 #include "AIController.h"
 #include "AbilitySystemInterface.h"
 #include "AbilitySystemComponent.h"
@@ -35,14 +35,39 @@ bool UBTDecorator_CheckGameplayTag::CalculateRawConditionValue(UBehaviorTreeComp
 	return bRequireTag ? bHasTag : !bHasTag;
 }
 
+uint16 UBTDecorator_CheckGameplayTag::GetInstanceMemorySize() const
+{
+	return sizeof(FTagDecoratorMemory);
+}
+
+void UBTDecorator_CheckGameplayTag::OnBecomeRelevant(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
+{
+	Super::OnBecomeRelevant(OwnerComp, NodeMemory);
+
+	// 관찰을 시작하는 시점의 조건을 기준값으로 잡아 둔다.
+	// 이게 없으면 첫 틱이 항상 "변했다"로 판정되어 불필요한 재평가가 한 번 발생한다.
+	FTagDecoratorMemory* Memory = CastInstanceNodeMemory<FTagDecoratorMemory>(NodeMemory);
+	Memory->bLastResult = CalculateRawConditionValue(OwnerComp, NodeMemory);
+}
+
 void UBTDecorator_CheckGameplayTag::TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
 	Super::TickNode(OwnerComp, NodeMemory, DeltaSeconds);
 
-	// 상태가 변했는지 틱마다 확인하여 트리 중단(Abort) 처리
-	bool bConditionMet = CalculateRawConditionValue(OwnerComp, NodeMemory);
-	
-	// 원래 조건과 달라졌고, Observer가 설정되어 있다면 Abort 시킴
-	// 간단한 실시간 감지를 위해 기본 데코레이터 기능을 재평가하도록 유도
+	// 게임플레이 태그는 BT 외부에서 바뀌므로 여기서 폴링해 변화를 감지한다.
+	//
+	// 단, 재평가 요청은 "값이 실제로 바뀐 순간"에만 해야 한다.
+	// 매 틱 무조건 RequestExecution 을 부르면 실행 중인 브랜치가 매 프레임 중단/재시작되어
+	// MoveTo 가 가속과 정지를 반복하고, 몽타주가 재생 도중 다시 시작되며,
+	// 어빌리티가 끝나자마자 재활성화되는 증상이 한꺼번에 나타난다.
+	FTagDecoratorMemory* Memory = CastInstanceNodeMemory<FTagDecoratorMemory>(NodeMemory);
+	const bool bConditionMet = CalculateRawConditionValue(OwnerComp, NodeMemory);
+
+	if (Memory->bLastResult == bConditionMet)
+	{
+		return;
+	}
+
+	Memory->bLastResult = bConditionMet;
 	OwnerComp.RequestExecution(this);
 }

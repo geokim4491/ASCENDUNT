@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -32,6 +32,19 @@ class ASCENDUNT_API UGA_AIFire_Auto : public UGA_Fire_Auto
 	GENERATED_BODY()
 
 protected:
+	/**
+	 * 곡사 조준.
+	 *
+	 * 무기 Mode 의 bUseBallisticArc 가 켜져 있고 ProjectileClass 가 중력을 받으면,
+	 * 데이터가 정한 ProjectileSpeed 를 유지한 채 조준점에 도달하는 발사 각도를 계산한다.
+	 * 조건이 하나라도 어긋나면 기본 직사 방향을 그대로 쓴다.
+	 */
+	virtual FVector ComputeProjectileLaunchDir(
+		const FAscenduntFireOnceContext& Ctx,
+		const FVector& MuzzleLoc,
+		const FVector& AimPoint
+	) const override;
+
 	virtual bool BuildViewRayAndMuzzle(
 		const FGameplayAbilityActorInfo* ActorInfo,
 		AAscenduntWeapon* Weapon,

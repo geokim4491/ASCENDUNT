@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 #include "AscenduntWeapon.h"
 #include "Net/UnrealNetwork.h"
@@ -123,7 +123,7 @@ void AAscenduntWeapon::BeginPlay()
 FTransform AAscenduntWeapon::GetMuzzleTransform() const
 {
 	// StaticMesh 무기는 검 등 근접무기 외형 전용으로 사용한다.
-	// 발사 시작점은 기존처럼 Skeletal WeaponMesh에서만 찾는다.
+	// 게임플레이 기준점은 항상 3P WeaponMesh를 사용한다.
 	if (WeaponMesh)
 	{
 		if (WeaponMesh->DoesSocketExist(MuzzleSocketName))
@@ -133,6 +133,23 @@ FTransform AAscenduntWeapon::GetMuzzleTransform() const
 		return WeaponMesh->GetComponentTransform();
 	}
 	return GetActorTransform();
+}
+
+FTransform AAscenduntWeapon::GetMuzzleVFXTransform() const
+{
+	// 연출은 이 머신에서 실제로 보이는 무기를 기준으로 한다.
+	// 로컬 오너의 1P WeaponMesh1P가 활성화된 경우에만 1P Muzzle을 선택하고,
+	// Dedicated Server와 원격 클라이언트에서는 자연스럽게 3P WeaponMesh로 fallback 된다.
+	if (const USkeletalMeshComponent* MuzzleMesh = GetMuzzleAttachMesh())
+	{
+		if (MuzzleMesh->DoesSocketExist(MuzzleSocketName))
+		{
+			return MuzzleMesh->GetSocketTransform(MuzzleSocketName);
+		}
+		return MuzzleMesh->GetComponentTransform();
+	}
+
+	return GetMuzzleTransform();
 }
 
 
@@ -619,9 +636,101 @@ float AAscenduntWeapon::GetMaxRange() const
 	return GetCurrentModeStats().MaxRange;
 }
 
+bool AAscenduntWeapon::SetWeaponModeByIndex(const int32 NewModeIndex)
+{
+	// CurrentModeIndex 는 복제 프로퍼티다. 서버만 바꾼다.
+	if (!HasAuthority() || !WeaponData || !WeaponData->Modes.IsValidIndex(NewModeIndex))
+	{
+		return false;
+	}
+
+	if (NewModeIndex == CurrentModeIndex)
+	{
+		return true;
+	}
+
+	// 재장전 중 전환은 탄약과 재장전 타이머를 어긋나게 만든다.
+	// 전환이 필요하면 호출부가 먼저 재장전을 끝내거나 취소해야 한다.
+	if (bReloading)
+	{
+		return false;
+	}
+
+	UAscenduntAbilitySystemComponent* AscASC = GetCachedAscASC();
+
+	// 무기 스탯 GE 는 "현재 모드의 Stats" 로 스펙을 만든다.
+	// 인덱스를 바꾸기 전에 걷어내야 새 모드 수치로 다시 만들어진다.
+	if (AscASC)
+	{
+		RemoveWeaponStatsEffect(AscASC);
+	}
+
+	const int32 PreviousAmmo = CurrentAmmoInMag;
+	CurrentModeIndex = NewModeIndex;
+
+	if (AscASC)
+	{
+		ApplyWeaponStatsEffect(AscASC);
+		InitAmmoFromAttributes(AscASC);
+	}
+	else
+	{
+		MagSize = GetCurrentModeStats().MagSize;
+	}
+
+	// InitAmmoFromAttributes 는 탄창을 가득 채운다.
+	// 모드 전환이 재장전을 대신하면 안 되므로 이전 잔탄을 새 탄창 크기로 잘라 되돌린다.
+	CurrentAmmoInMag = FMath::Clamp(PreviousAmmo, 0, FMath::Max(0, MagSize));
+
+	// 서버에서는 OnRep 이 호출되지 않는다. 같은 갱신을 직접 돌린다.
+	HandleModeChanged();
+
+	return true;
+}
+
+bool AAscenduntWeapon::SetWeaponModeByTag(const FGameplayTag ModeTag)
+{
+	if (!WeaponData || !ModeTag.IsValid())
+	{
+		return false;
+	}
+
+	for (int32 Index = 0; Index < WeaponData->Modes.Num(); ++Index)
+	{
+		if (WeaponData->Modes[Index].ModeTag.MatchesTagExact(ModeTag))
+		{
+			return SetWeaponModeByIndex(Index);
+		}
+	}
+
+	return false;
+}
+
+FGameplayTag AAscenduntWeapon::GetCurrentModeTag() const
+{
+	if (WeaponData && WeaponData->Modes.IsValidIndex(CurrentModeIndex))
+	{
+		return WeaponData->Modes[CurrentModeIndex].ModeTag;
+	}
+
+	return FGameplayTag();
+}
+
+void AAscenduntWeapon::HandleModeChanged()
+{
+	// 모드마다 탄창 크기가 다르므로 HUD 를 새 값으로 맞춘다.
+	OnAmmoChanged.Broadcast(CurrentAmmoInMag, MagSize);
+
+	// 이전 모드의 발사 간격으로 잡아둔 게이트를 새 모드가 물려받지 않게 한다.
+	// 느린 모드에서 빠른 모드로 바꿨을 때 첫 발이 불필요하게 지연되는 것을 막는다.
+	NextAllowedFireTimeServer = 0.0;
+	NextAllowedFireTimePredicted = 0.0;
+}
+
 void AAscenduntWeapon::OnRep_CurrentModeIndex()
 {
-	// 클라에서 HUD/조준/FOV 업데이트 등
+	// 클라이언트에서도 HUD 를 서버와 같은 값으로 맞춘다.
+	HandleModeChanged();
 }
 
 void AAscenduntWeapon::OnRep_CurrentAmmoInMag()
