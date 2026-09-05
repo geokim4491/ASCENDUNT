@@ -192,7 +192,6 @@ void UHeroFirstPersonComponent::ApplyMesh1PVisibility(AHeroCharacter* Hero, bool
 	// 1P 팔은 X-Ray 표시 대상이 아니라, 화면 앞의 X-Ray를 가리는 로컬 Blocker다.
 	// GatherVisionMeshes에 넣으면 Enemy Overlay까지 적용되므로 여기서 CustomDepth만 관리한다.
 	Mesh1P->SetRenderCustomDepth(bFirstPerson);
-	Mesh1P->MarkRenderStateDirty();
 
 	if (!Mesh1P->GetSkeletalMeshAsset())
 	{
@@ -247,7 +246,6 @@ void UHeroFirstPersonComponent::SetWeaponFirstPersonState(AAscenduntWeapon* Weap
 	if (USkeletalMeshComponent* WeaponMesh1P = Weapon->GetWeaponMesh1P())
 	{
 		WeaponMesh1P->SetRenderCustomDepth(bFirstPerson);
-		WeaponMesh1P->MarkRenderStateDirty();
 	}
 
 	TArray<UMeshComponent*> WeaponXRayMeshes;

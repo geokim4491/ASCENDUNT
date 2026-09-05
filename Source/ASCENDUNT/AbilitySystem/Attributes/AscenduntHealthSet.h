@@ -226,8 +226,9 @@ private:
 	// “Thorn이 깎였을 때만” 호출
 	void TryApplyThornReflect_WhenThornDamaged(const FGameplayEffectModCallbackData& Data, float RawDamage);
 
-	// 클라에 Broadcast
+	// 클라이언트 RepNotify에서 Snapshot/UI 갱신
 	void BroadcastHealthChangedFromRep(float NewValue, float OldValue);
+	void BroadcastHealthCapacityChangedFromRep(float NewValue, float OldValue);
 
 	void GCCharacterHit(const FGameplayEffectModCallbackData& Data, const FDamageSplit& Split, const float RawDamage, const float RawHeal);
 };

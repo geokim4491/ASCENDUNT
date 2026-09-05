@@ -19,6 +19,9 @@ class UAscenduntHealthSet;
 class UAscenduntHealthComponent;
 class UWeaponEquipmentComponent;
 
+class ABaseAICharacter;
+DECLARE_MULTICAST_DELEGATE_TwoParams(FOnAscPooledActiveStateChangedNative, ABaseAICharacter* /*Character*/, bool /*bActive*/);
+
 /**
  * 
  */
@@ -71,6 +74,9 @@ public:
 	// AActor::bActorEnableCollision은 복제되지 않으므로, 이 경로가 없으면
 	// 클라이언트에는 "보이지 않는데 단단한" 시체가 남는다.
 	void SetPooledActive(bool bActive);
+
+	// 풀 활성/비활성 전환 시 로컬 비주얼 시스템이 즉시 상태를 갱신하도록 알린다.
+	FOnAscPooledActiveStateChangedNative OnPooledActiveStateChanged;
 
 	/**
 	 * 현재 콜스택을 빠져나간 뒤 HealthComponent::FinishDeath()를 호출한다.

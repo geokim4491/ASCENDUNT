@@ -73,8 +73,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Ascendunt|Feedback")
 	const UAscCharacterFeedbackData* GetCharacterFeedbackData() const { return CharacterFeedbackData; }
 
-	// 적 overlay용. 실제 지원 여부는 캐릭터 타입이 결정한다.
+	// 로컬 Vision 표현 적용. 실제 Mesh 구성은 각 캐릭터가 Gather 함수로 제공한다.
 	void SetEnemyOverlayEnabled(bool bEnabled);
+	void SetVisionBlockerEnabled(bool bEnabled);
+	void SetXRayEnabled(bool bEnabled, float HealthNorm = 1.f, float XRayAlpha = 1.f);
 
 	// AI는 둘 다 false, Hero만 true. Vision Subsystem이 불필요한 렌더 상태 변경을 건너뛴다.
 	virtual bool SupportsEnemyOverlay() const { return false; }
@@ -89,8 +91,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ascendunt|Vision|XRay")
 	USkeletalMeshComponent* GetXRayBodyMesh() const { return XRayBodyMesh; }
 
-	// 치명상 경고 위젯 크기 조절
-	void SetCriticalWarningScale(float InScale);
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void PossessedBy(AController* NewController) override;

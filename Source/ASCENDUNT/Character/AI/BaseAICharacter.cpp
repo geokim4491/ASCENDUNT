@@ -123,6 +123,8 @@ void ABaseAICharacter::ApplyPooledActiveState(bool bActive)
 			}
 		}
 	}
+
+	OnPooledActiveStateChanged.Broadcast(this, bActive);
 }
 
 void ABaseAICharacter::SetInteractionCollisionEnabled(bool bEnabled)

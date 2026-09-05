@@ -238,7 +238,54 @@ void ABaseCharacter::SetEnemyOverlayEnabled(bool bEnabled)
 		}
 
 		MeshComponent->SetOverlayMaterial(bEnabled ? EnemyOverlayMaterial : nullptr);
-		MeshComponent->MarkRenderStateDirty();
+	}
+}
+
+void ABaseCharacter::SetVisionBlockerEnabled(bool bEnabled)
+{
+	if (!SupportsXRay())
+	{
+		return;
+	}
+
+	TArray<UMeshComponent*> Meshes;
+	GatherVisionMeshes(Meshes);
+
+	for (UMeshComponent* MeshComponent : Meshes)
+	{
+		if (IsValid(MeshComponent))
+		{
+			MeshComponent->SetRenderCustomDepth(bEnabled);
+		}
+	}
+}
+
+void ABaseCharacter::SetXRayEnabled(bool bEnabled, float HealthNorm, float XRayAlpha)
+{
+	if (!SupportsXRay())
+	{
+		return;
+	}
+
+	TArray<UMeshComponent*> XRayMeshes;
+	GatherXRayMeshes(XRayMeshes);
+
+	for (UMeshComponent* MeshComponent : XRayMeshes)
+	{
+		if (!IsValid(MeshComponent))
+		{
+			continue;
+		}
+
+		MeshComponent->SetVisibility(bEnabled, true);
+		MeshComponent->SetHiddenInGame(!bEnabled, true);
+		MeshComponent->SetRenderCustomDepth(false);
+
+		if (bEnabled)
+		{
+			MeshComponent->SetCustomPrimitiveDataFloat(0, FMath::Clamp(HealthNorm, 0.f, 1.f));
+			MeshComponent->SetCustomPrimitiveDataFloat(1, FMath::Clamp(XRayAlpha, 0.f, 1.f));
+		}
 	}
 }
 
@@ -380,18 +427,6 @@ bool ABaseCharacter::ShouldHideXRayMaterialSlot(const FName SlotName, const UMat
 		HasToken(NameToCheck, TEXT("GUM")) ||         // 잇몸
 		HasToken(NameToCheck, TEXT("GUMS"));
 	
-}
-
-void ABaseCharacter::SetCriticalWarningScale(float InScale)
-{
-	if (!VisionMarkerComponent || !VisionMarkerComponent->GetCriticalWidgetComponent()) return;
-
-	const float ClampedScale = FMath::Clamp(InScale, 0.2f, 1.0f);
-
-	if (UUserWidget* Widget = VisionMarkerComponent->GetCriticalWidgetComponent()->GetUserWidgetObject())
-	{
-		Widget->SetRenderScale(FVector2D(ClampedScale, ClampedScale));
-	}
 }
 
 void ABaseCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const

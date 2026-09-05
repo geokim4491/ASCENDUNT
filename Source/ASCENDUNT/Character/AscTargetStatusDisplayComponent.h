@@ -10,10 +10,11 @@ class UWidgetComponent;
 class USkeletalMeshComponent;
 class UAscDownedIndicatorWidget;
 class UAscPvEDownedComponent;
+class UAscenduntHealthComponent;
 
 /**
  * Local-only presentation component attached to every ABaseCharacter, including AI.
- * It never owns replicated status data; it only renders state supplied by the local viewer.
+ * 로컬 뷰어는 표시 여부와 관계만 결정하고, 표시 중인 체력 Snapshot 갱신은 이 컴포넌트가 직접 처리한다.
  *
  * World-space widget placement is read from UAscWorldStatusLayoutData and attaches directly
  * to skeletal-mesh sockets. Character Blueprints do not need separate anchor components.
@@ -26,14 +27,9 @@ class ASCENDUNT_API UAscTargetStatusDisplayComponent : public UActorComponent
 public:
 	UAscTargetStatusDisplayComponent();
 
-	UFUNCTION(BlueprintPure, Category = "Ascendunt|TargetStatus")
-	static UAscTargetStatusDisplayComponent* FindTargetStatusDisplayComponent(const AActor* Actor);
 
-
-	/** Local-only overhead health bar controlled by the local viewer subsystem. */
-	void SetTargetHealthBar(const FAscenduntHealthSnapshot& HealthSnapshot, EAscTargetHealthBarRelation Relation);
-
-	void ClearTargetHealthBar();
+	/** 로컬 뷰어 기준 체력바 표시 여부만 외부에서 결정한다. 실제 Snapshot 갱신은 이 컴포넌트가 담당한다. */
+	void SetTargetHealthBarVisible(bool bVisible, EAscTargetHealthBarRelation Relation);
 
 	UFUNCTION(BlueprintPure, Category = "Ascendunt|TargetStatus|Health")
 	bool IsTargetHealthBarVisible() const;
@@ -52,7 +48,11 @@ protected:
 private:
 	USkeletalMeshComponent* GetOwnerMesh() const;
 
+	// 체력바 생성과 Health Snapshot 반영
 	void EnsureTargetHealthBarWidget();
+	void RefreshTargetHealthBar();
+	void ShowTargetHealthBar(const FAscenduntHealthSnapshot& HealthSnapshot);
+	void HideTargetHealthBar();
 	const FAscWorldStatusWidgetLayout* GetTargetHealthBarLayout() const;
 	USkeletalMeshComponent* ResolveLayoutMesh(const FAscWorldStatusWidgetLayout& Layout,
 		bool& bReportedMissingMesh, const TCHAR* WidgetContext) const;
@@ -70,11 +70,22 @@ private:
 	bool ShouldTickForVisibleStatusWidget() const;
 
 	UFUNCTION()
+	void HandleOwnerHealthChanged(
+		UAscenduntHealthComponent* HealthComponent,
+		AActor* OwningActor,
+		AActor* Instigator,
+		bool bWasDamaging,
+		float RawValue,
+		const FAscenduntHealthSnapshot& HealthSnapshot);
+
+	UFUNCTION()
 	void HandleOwnerDeathStarted(AActor* OwningActor);
 
 	void HandleOwnerDownedStateChanged(bool bIsDowned);
 
 private:
+	bool bTargetHealthBarRequestedVisible = false;
+	EAscTargetHealthBarRelation TargetHealthBarRelation = EAscTargetHealthBarRelation::Enemy;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UWidgetComponent> TargetHealthBarWidgetComponent;

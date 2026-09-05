@@ -20,17 +20,13 @@ UAscTargetStatusDisplayComponent::UAscTargetStatusDisplayComponent()
 	SetIsReplicatedByDefault(false);
 }
 
-UAscTargetStatusDisplayComponent* UAscTargetStatusDisplayComponent::FindTargetStatusDisplayComponent(const AActor* Actor)
-{
-	return Actor ? Actor->FindComponentByClass<UAscTargetStatusDisplayComponent>() : nullptr;
-}
-
 void UAscTargetStatusDisplayComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
 	if (UAscenduntHealthComponent* HealthComponent = UAscenduntHealthComponent::FindHealthComponent(GetOwner()))
 	{
+		HealthComponent->OnHealthChanged.AddUniqueDynamic(this, &ThisClass::HandleOwnerHealthChanged);
 		HealthComponent->OnDeathStarted.AddUniqueDynamic(this, &ThisClass::HandleOwnerDeathStarted);
 	}
 
@@ -50,6 +46,7 @@ void UAscTargetStatusDisplayComponent::EndPlay(const EEndPlayReason::Type EndPla
 {
 	if (UAscenduntHealthComponent* HealthComponent = UAscenduntHealthComponent::FindHealthComponent(GetOwner()))
 	{
+		HealthComponent->OnHealthChanged.RemoveDynamic(this, &ThisClass::HandleOwnerHealthChanged);
 		HealthComponent->OnDeathStarted.RemoveDynamic(this, &ThisClass::HandleOwnerDeathStarted);
 	}
 
@@ -61,7 +58,7 @@ void UAscTargetStatusDisplayComponent::EndPlay(const EEndPlayReason::Type EndPla
 		}
 	}
 
-	ClearTargetHealthBar();
+	SetTargetHealthBarVisible(false, TargetHealthBarRelation);
 	ClearDownedIndicator();
 
 
@@ -116,8 +113,55 @@ void UAscTargetStatusDisplayComponent::TickComponent(float DeltaTime, ELevelTick
 }
 
 
-void UAscTargetStatusDisplayComponent::SetTargetHealthBar(
-	const FAscenduntHealthSnapshot& HealthSnapshot, EAscTargetHealthBarRelation Relation)
+void UAscTargetStatusDisplayComponent::SetTargetHealthBarVisible(
+	bool bVisible,
+	EAscTargetHealthBarRelation Relation)
+{
+	const bool bStateChanged =
+		bTargetHealthBarRequestedVisible != bVisible || TargetHealthBarRelation != Relation;
+
+	bTargetHealthBarRequestedVisible = bVisible;
+	TargetHealthBarRelation = Relation;
+
+	if (!bVisible)
+	{
+		if (bStateChanged || IsTargetHealthBarVisible())
+		{
+			HideTargetHealthBar();
+		}
+		return;
+	}
+
+	if (bStateChanged || !IsTargetHealthBarVisible())
+	{
+		RefreshTargetHealthBar();
+	}
+}
+
+void UAscTargetStatusDisplayComponent::RefreshTargetHealthBar()
+{
+	if (!bTargetHealthBarRequestedVisible)
+	{
+		HideTargetHealthBar();
+		return;
+	}
+
+	const UAscenduntHealthComponent* HealthComponent =
+		UAscenduntHealthComponent::FindHealthComponent(GetOwner());
+	FAscenduntHealthSnapshot Snapshot;
+	if (!HealthComponent || !HealthComponent->GetHealthSnapshot(Snapshot) ||
+		Snapshot.GetDisplayCapacityTotal() <= KINDA_SMALL_NUMBER)
+	{
+		// AttributeSet 객체만 먼저 복제된 미준비 상태는 0 / 0 체력으로 그리지 않는다.
+		HideTargetHealthBar();
+		return;
+	}
+
+	ShowTargetHealthBar(Snapshot);
+}
+
+void UAscTargetStatusDisplayComponent::ShowTargetHealthBar(
+	const FAscenduntHealthSnapshot& HealthSnapshot)
 {
 	EnsureTargetHealthBarWidget();
 	if (!TargetHealthBarWidgetComponent || !TargetHealthBarWidget)
@@ -125,7 +169,7 @@ void UAscTargetStatusDisplayComponent::SetTargetHealthBar(
 		return;
 	}
 
-	TargetHealthBarWidget->SetRelation(Relation);
+	TargetHealthBarWidget->SetRelation(TargetHealthBarRelation);
 	TargetHealthBarWidget->SetHealthSnapshot(HealthSnapshot);
 
 	TargetHealthBarWidgetComponent->SetVisibility(true, true);
@@ -143,7 +187,7 @@ void UAscTargetStatusDisplayComponent::SetTargetHealthBar(
 	}
 }
 
-void UAscTargetStatusDisplayComponent::ClearTargetHealthBar()
+void UAscTargetStatusDisplayComponent::HideTargetHealthBar()
 {
 	if (TargetHealthBarWidgetComponent)
 	{
@@ -578,9 +622,32 @@ bool UAscTargetStatusDisplayComponent::ShouldTickForVisibleStatusWidget() const
 	return bHealthBarNeedsFacing || bDownedVisible;
 }
 
+void UAscTargetStatusDisplayComponent::HandleOwnerHealthChanged(
+	UAscenduntHealthComponent*,
+	AActor*,
+	AActor*,
+	bool,
+	float,
+	const FAscenduntHealthSnapshot& HealthSnapshot)
+{
+	if (!bTargetHealthBarRequestedVisible)
+	{
+		return;
+	}
+
+	if (HealthSnapshot.GetDisplayCapacityTotal() <= KINDA_SMALL_NUMBER)
+	{
+		HideTargetHealthBar();
+		return;
+	}
+
+	ShowTargetHealthBar(HealthSnapshot);
+}
+
 void UAscTargetStatusDisplayComponent::HandleOwnerDeathStarted(AActor* OwningActor)
 {
-	ClearTargetHealthBar();
+	// Downed 여부가 확정되기 전 잠깐 숨긴다. 로컬 Vision 판정이 살아있다면 다시 표시된다.
+	HideTargetHealthBar();
 }
 
 void UAscTargetStatusDisplayComponent::HandleOwnerDownedStateChanged(bool bIsDowned)

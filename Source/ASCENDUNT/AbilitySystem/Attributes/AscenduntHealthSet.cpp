@@ -236,6 +236,8 @@ void UAscenduntHealthSet::OnRep_BasicHealth(const FGameplayAttributeData& OldVal
 
 void UAscenduntHealthSet::OnRep_MaxBasicHealth(const FGameplayAttributeData& OldValue)
 {
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UAscenduntHealthSet, MaxBasicHealth, OldValue);
+	BroadcastHealthCapacityChangedFromRep(GetMaxBasicHealth(), OldValue.GetCurrentValue());
 }
 
 void UAscenduntHealthSet::OnRep_Armor(const FGameplayAttributeData& OldValue)
@@ -246,6 +248,8 @@ void UAscenduntHealthSet::OnRep_Armor(const FGameplayAttributeData& OldValue)
 
 void UAscenduntHealthSet::OnRep_MaxArmor(const FGameplayAttributeData& OldValue)
 {
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UAscenduntHealthSet, MaxArmor, OldValue);
+	BroadcastHealthCapacityChangedFromRep(GetMaxArmor(), OldValue.GetCurrentValue());
 }
 
 void UAscenduntHealthSet::OnRep_Thorn(const FGameplayAttributeData& OldValue)
@@ -256,6 +260,8 @@ void UAscenduntHealthSet::OnRep_Thorn(const FGameplayAttributeData& OldValue)
 
 void UAscenduntHealthSet::OnRep_MaxThorn(const FGameplayAttributeData& OldValue)
 {
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UAscenduntHealthSet, MaxThorn, OldValue);
+	BroadcastHealthCapacityChangedFromRep(GetMaxThorn(), OldValue.GetCurrentValue());
 }
 
 void UAscenduntHealthSet::OnRep_OverHealth(const FGameplayAttributeData& OldValue)
@@ -266,26 +272,33 @@ void UAscenduntHealthSet::OnRep_OverHealth(const FGameplayAttributeData& OldValu
 
 void UAscenduntHealthSet::OnRep_MaxOverHealth(const FGameplayAttributeData& OldValue)
 {
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UAscenduntHealthSet, MaxOverHealth, OldValue);
+	BroadcastHealthCapacityChangedFromRep(GetMaxOverHealth(), OldValue.GetCurrentValue());
 }
 
 void UAscenduntHealthSet::OnRep_RegenRate(const FGameplayAttributeData& OldValue)
 {
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UAscenduntHealthSet, RegenRate, OldValue);
 }
 
 void UAscenduntHealthSet::OnRep_RegenDelay(const FGameplayAttributeData& OldValue)
 {
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UAscenduntHealthSet, RegenDelay, OldValue);
 }
 
 void UAscenduntHealthSet::OnRep_ArmorFlatReduction(const FGameplayAttributeData& OldValue)
 {
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UAscenduntHealthSet, ArmorFlatReductionPerInstance, OldValue);
 }
 
 void UAscenduntHealthSet::OnRep_ArmorMaxReductionPct(const FGameplayAttributeData& OldValue)
 {
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UAscenduntHealthSet, ArmorMaxReductionPct, OldValue);
 }
 
 void UAscenduntHealthSet::OnRep_ThornReflectPct(const FGameplayAttributeData& OldValue)
 {
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UAscenduntHealthSet, ThornReflectPct, OldValue);
 }
 
 void UAscenduntHealthSet::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -703,6 +716,26 @@ void UAscenduntHealthSet::BroadcastHealthChangedFromRep(float NewValue, float Ol
 		Delta < 0.f,          // 감소면 damaging
 		nullptr,              // EffectSpec 없음
 		FMath::Abs(Delta),    // RawValue는 delta로 대체
+		LastHealthSnapshot
+	);
+}
+
+void UAscenduntHealthSet::BroadcastHealthCapacityChangedFromRep(float NewValue, float OldValue)
+{
+	if (FMath::IsNearlyEqual(NewValue, OldValue))
+	{
+		return;
+	}
+
+	SetHealthSnapshot();
+
+	// Max Pool 변경은 데미지/힐이 아니므로 RawValue 없이 최신 Snapshot만 전달한다.
+	OnHealthChanged.Broadcast(
+		GetOwningActor(),
+		nullptr,
+		false,
+		nullptr,
+		0.f,
 		LastHealthSnapshot
 	);
 }

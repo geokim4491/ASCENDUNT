@@ -5,21 +5,20 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
-#include "Materials/MaterialInterface.h"
 #include "TimerManager.h"
-#include "Components/MeshComponent.h"
-#include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/PlayerController.h"
 
+#include "ASCENDUNT/Character/AI/BaseAICharacter.h"
 #include "ASCENDUNT/Character/AscenduntHealthComponent.h"
 #include "ASCENDUNT/Character/AscVisionMarkerComponent.h"
 #include "ASCENDUNT/Character/AscTargetStatusDisplayComponent.h"
 #include "ASCENDUNT/Character/BaseCharacter.h"
 #include "ASCENDUNT/Character/Hero/PVE/AscPvEDownedComponent.h"
-#include "ASCENDUNT/Player/AscenduntPlayerState.h"
 #include "ASCENDUNT/Player/AscenduntPlayerController.h"
+#include "ASCENDUNT/Player/AscenduntPlayerState.h"
 #include "ASCENDUNT/Player/AscTargetAwarenessComponent.h"
-
+#include "ASCENDUNT/Weapon/AscenduntWeapon.h"
+#include "ASCENDUNT/Weapon/WeaponEquipmentComponent.h"
 
 void UAscVisionLocalPlayerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -49,28 +48,24 @@ void UAscVisionLocalPlayerSubsystem::Deinitialize()
 void UAscVisionLocalPlayerSubsystem::PlayerControllerChanged(APlayerController* NewPlayerController)
 {
 	Super::PlayerControllerChanged(NewPlayerController);
+
 	RefreshLocalContext();
 	RefreshAllVisuals();
 }
 
-void UAscVisionLocalPlayerSubsystem::HandlePostWorldInit(UWorld* World, const UWorld::InitializationValues IVS)
+void UAscVisionLocalPlayerSubsystem::HandlePostWorldInit(
+	UWorld* World,
+	const UWorld::InitializationValues)
 {
-	if (!World || World != GetWorld())
+	if (World && World == GetWorld())
 	{
-		return;
+		AttachToWorld(World);
 	}
-
-	AttachToWorld(World);
 }
 
 void UAscVisionLocalPlayerSubsystem::AttachToWorld(UWorld* World)
 {
-	if (!World)
-	{
-		return;
-	}
-
-	if (BoundWorld.Get() == World)
+	if (!World || BoundWorld.Get() == World)
 	{
 		return;
 	}
@@ -81,16 +76,19 @@ void UAscVisionLocalPlayerSubsystem::AttachToWorld(UWorld* World)
 	ActorSpawnedHandle = World->AddOnActorSpawnedHandler(
 		FOnActorSpawned::FDelegate::CreateUObject(this, &ThisClass::HandleActorSpawned));
 
-	World->GetTimerManager().SetTimer(
-		RefreshTimerHandle,
-		this,
-		&ThisClass::RefreshTrackedCharacters,
-		RefreshInterval,
-		true);
-
 	RefreshLocalContext();
-	RefreshTrackedCharacters();
-	RefreshAllVisuals();
+
+	for (TActorIterator<ABaseCharacter> It(World); It; ++It)
+	{
+		RegisterCharacter(*It);
+	}
+
+	World->GetTimerManager().SetTimer(
+		MaintenanceTimerHandle,
+		this,
+		&ThisClass::HandleMaintenanceTick,
+		MaintenanceInterval,
+		true);
 }
 
 void UAscVisionLocalPlayerSubsystem::DetachFromWorld()
@@ -98,13 +96,11 @@ void UAscVisionLocalPlayerSubsystem::DetachFromWorld()
 	if (CachedTargetAwarenessComponent.IsValid())
 	{
 		CachedTargetAwarenessComponent->OnObservedTargetsChanged.RemoveAll(this);
-		CachedTargetAwarenessComponent.Reset();
 	}
 
 	if (CachedLocalPlayerState.IsValid())
 	{
 		CachedLocalPlayerState->OnTeamIdChanged.RemoveAll(this);
-		CachedLocalPlayerState.Reset();
 	}
 
 	if (UWorld* World = BoundWorld.Get())
@@ -115,62 +111,47 @@ void UAscVisionLocalPlayerSubsystem::DetachFromWorld()
 			ActorSpawnedHandle.Reset();
 		}
 
-		World->GetTimerManager().ClearTimer(RefreshTimerHandle);
+		World->GetTimerManager().ClearTimer(MaintenanceTimerHandle);
 	}
 
+	TArray<ABaseCharacter*> CharactersToUnregister;
+	CharactersToUnregister.Reserve(TrackedCharacters.Num());
 	for (const TWeakObjectPtr<ABaseCharacter>& WeakCharacter : TrackedCharacters)
 	{
 		if (ABaseCharacter* Character = WeakCharacter.Get())
 		{
-			ApplyDisabledState(Character, false);
-
-			if (UAscenduntHealthComponent* HealthComp = Character->GetAscenduntHealthComponent())
-			{
-				HealthComp->OnHealthChanged.RemoveDynamic(this, &ThisClass::HandleTrackedHealthChanged);
-				HealthComp->OnDeathStarted.RemoveDynamic(this, &ThisClass::HandleTrackedDeathStarted);
-				HealthComp->OnDeathFinished.RemoveDynamic(this, &ThisClass::HandleTrackedDeathFinished);
-			}
+			CharactersToUnregister.Add(Character);
 		}
 	}
 
+	for (ABaseCharacter* Character : CharactersToUnregister)
+	{
+		UnregisterCharacter(Character);
+	}
+
 	TrackedCharacters.Reset();
+	PendingInitialRefreshCharacters.Reset();
 	BoundWorld.Reset();
 	CachedPlayerController.Reset();
+	CachedLocalPlayerState.Reset();
+	CachedLocalCharacter.Reset();
+	CachedTargetAwarenessComponent.Reset();
 }
 
-void UAscVisionLocalPlayerSubsystem::RefreshLocalContext()
+bool UAscVisionLocalPlayerSubsystem::RefreshLocalContext()
 {
+	bool bChanged = false;
+
 	APlayerController* NewPC = nullptr;
-	if (ULocalPlayer* LP = GetLocalPlayer())
+	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
 	{
-		NewPC = LP->GetPlayerController(GetWorld());
+		NewPC = LocalPlayer->GetPlayerController(GetWorld());
 	}
 
 	if (CachedPlayerController.Get() != NewPC)
 	{
-		if (CachedTargetAwarenessComponent.IsValid())
-		{
-			CachedTargetAwarenessComponent->OnObservedTargetsChanged.RemoveAll(this);
-			CachedTargetAwarenessComponent.Reset();
-		}
-
-		if (CachedLocalPlayerState.IsValid())
-		{
-			CachedLocalPlayerState->OnTeamIdChanged.RemoveAll(this);
-			CachedLocalPlayerState.Reset();
-		}
-
 		CachedPlayerController = NewPC;
-
-		if (AAscenduntPlayerController* AscPC = Cast<AAscenduntPlayerController>(NewPC))
-		{
-			CachedTargetAwarenessComponent = AscPC->GetTargetAwarenessComponent();
-			if (CachedTargetAwarenessComponent.IsValid())
-			{
-				CachedTargetAwarenessComponent->OnObservedTargetsChanged.AddUObject(
-					this, &ThisClass::HandleObservedTargetsChanged);
-			}
-		}
+		bChanged = true;
 	}
 
 	AAscenduntPlayerState* NewPS = NewPC ? NewPC->GetPlayerState<AAscenduntPlayerState>() : nullptr;
@@ -182,64 +163,70 @@ void UAscVisionLocalPlayerSubsystem::RefreshLocalContext()
 		}
 
 		CachedLocalPlayerState = NewPS;
-
 		if (CachedLocalPlayerState.IsValid())
 		{
 			CachedLocalPlayerState->OnTeamIdChanged.AddUObject(this, &ThisClass::HandleLocalTeamChanged);
 		}
+
+		bChanged = true;
 	}
+
+	UAscTargetAwarenessComponent* NewAwareness = nullptr;
+	if (AAscenduntPlayerController* AscPC = Cast<AAscenduntPlayerController>(NewPC))
+	{
+		NewAwareness = AscPC->GetTargetAwarenessComponent();
+	}
+
+	if (CachedTargetAwarenessComponent.Get() != NewAwareness)
+	{
+		if (CachedTargetAwarenessComponent.IsValid())
+		{
+			CachedTargetAwarenessComponent->OnObservedTargetsChanged.RemoveAll(this);
+		}
+
+		CachedTargetAwarenessComponent = NewAwareness;
+		if (CachedTargetAwarenessComponent.IsValid())
+		{
+			CachedTargetAwarenessComponent->OnObservedTargetsChanged.AddUObject(
+				this, &ThisClass::HandleObservedTargetsChanged);
+		}
+
+		bChanged = true;
+	}
+
+	ABaseCharacter* NewLocalCharacter = NewPC ? Cast<ABaseCharacter>(NewPC->GetPawn()) : nullptr;
+	if (CachedLocalCharacter.Get() != NewLocalCharacter)
+	{
+		CachedLocalCharacter = NewLocalCharacter;
+		bChanged = true;
+	}
+
+	return bChanged;
 }
 
-void UAscVisionLocalPlayerSubsystem::RefreshTrackedCharacters()
+void UAscVisionLocalPlayerSubsystem::HandleMaintenanceTick()
 {
-	UWorld* World = BoundWorld.Get();
-	if (!World)
+	if (RefreshLocalContext())
 	{
-		return;
+		RefreshAllVisuals();
 	}
 
-	RefreshLocalContext();
-
-	TSet<TWeakObjectPtr<ABaseCharacter>> SeenThisFrame;
-
-	for (TActorIterator<ABaseCharacter> It(World); It; ++It)
+	for (auto It = PendingInitialRefreshCharacters.CreateIterator(); It; ++It)
 	{
-		ABaseCharacter* Character = *It;
+		ABaseCharacter* Character = It->Get();
 		if (!IsValid(Character))
 		{
-			continue;
-		}
-
-		RegisterCharacter(Character);
-		SeenThisFrame.Add(Character);
-	}
-
-	for (auto It = TrackedCharacters.CreateIterator(); It; ++It)
-	{
-		if (!It->IsValid() || !SeenThisFrame.Contains(*It))
-		{
-			if (ABaseCharacter* Character = It->Get())
-			{
-				UnregisterCharacter(Character);
-			}
-			It.RemoveCurrent();
-		}
-	}
-
-	RefreshAllVisuals();
-}
-
-void UAscVisionLocalPlayerSubsystem::RefreshAllVisuals()
-{
-	for (auto It = TrackedCharacters.CreateIterator(); It; ++It)
-	{
-		if (!It->IsValid())
-		{
 			It.RemoveCurrent();
 			continue;
 		}
 
-		RefreshVisualsForCharacter(It->Get());
+		if (!Character->HasActorBegunPlay())
+		{
+			continue;
+		}
+
+		RefreshVisualsForCharacter(Character);
+		It.RemoveCurrent();
 	}
 }
 
@@ -257,32 +244,104 @@ void UAscVisionLocalPlayerSubsystem::RegisterCharacter(ABaseCharacter* Character
 	}
 
 	TrackedCharacters.Add(WeakCharacter);
+	Character->OnDestroyed.AddDynamic(this, &ThisClass::HandleTrackedActorDestroyed);
 
 	if (UAscenduntHealthComponent* HealthComp = Character->GetAscenduntHealthComponent())
 	{
-		HealthComp->OnHealthChanged.AddDynamic(this, &ThisClass::HandleTrackedHealthChanged);
-		HealthComp->OnDeathStarted.AddDynamic(this, &ThisClass::HandleTrackedDeathStarted);
-		HealthComp->OnDeathFinished.AddDynamic(this, &ThisClass::HandleTrackedDeathFinished);
+		if (Character->SupportsXRay())
+		{
+			HealthComp->OnHealthChanged.AddDynamic(this, &ThisClass::HandleTrackedHealthChanged);
+		}
+
+		HealthComp->OnDeathStarted.AddDynamic(this, &ThisClass::HandleTrackedLifeStateChanged);
+		HealthComp->OnDeathFinished.AddDynamic(this, &ThisClass::HandleTrackedLifeStateChanged);
 	}
 
-	RefreshVisualsForCharacter(Character);
+	if (UAscPvEDownedComponent* DownedComp = Character->FindComponentByClass<UAscPvEDownedComponent>())
+	{
+		DownedComp->OnDownedStateChanged.AddUObject(this, &ThisClass::HandleTrackedDownedStateChanged);
+	}
+
+	if (Character->SupportsXRay())
+	{
+		if (UWeaponEquipmentComponent* EquipmentComp = Character->FindComponentByClass<UWeaponEquipmentComponent>())
+		{
+			EquipmentComp->OnCurrentWeaponChanged.AddUObject(this, &ThisClass::HandleTrackedWeaponChanged);
+		}
+	}
+
+	if (ABaseAICharacter* AICharacter = Cast<ABaseAICharacter>(Character))
+	{
+		AICharacter->OnPooledActiveStateChanged.AddUObject(
+			this, &ThisClass::HandleTrackedPooledActiveChanged);
+	}
+
+	if (Character->HasActorBegunPlay())
+	{
+		RefreshVisualsForCharacter(Character);
+	}
+	else
+	{
+		PendingInitialRefreshCharacters.Add(WeakCharacter);
+	}
 }
 
 void UAscVisionLocalPlayerSubsystem::UnregisterCharacter(ABaseCharacter* Character)
 {
+	if (!Character)
+	{
+		return;
+	}
+
+	Character->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleTrackedActorDestroyed);
+
+	if (UAscenduntHealthComponent* HealthComp = Character->GetAscenduntHealthComponent())
+	{
+		HealthComp->OnHealthChanged.RemoveDynamic(this, &ThisClass::HandleTrackedHealthChanged);
+		HealthComp->OnDeathStarted.RemoveDynamic(this, &ThisClass::HandleTrackedLifeStateChanged);
+		HealthComp->OnDeathFinished.RemoveDynamic(this, &ThisClass::HandleTrackedLifeStateChanged);
+	}
+
+	if (UAscPvEDownedComponent* DownedComp = Character->FindComponentByClass<UAscPvEDownedComponent>())
+	{
+		DownedComp->OnDownedStateChanged.RemoveAll(this);
+	}
+
+	if (Character->SupportsXRay())
+	{
+		if (UWeaponEquipmentComponent* EquipmentComp = Character->FindComponentByClass<UWeaponEquipmentComponent>())
+		{
+			EquipmentComp->OnCurrentWeaponChanged.RemoveAll(this);
+		}
+	}
+
+	if (ABaseAICharacter* AICharacter = Cast<ABaseAICharacter>(Character))
+	{
+		AICharacter->OnPooledActiveStateChanged.RemoveAll(this);
+	}
+
+	const TWeakObjectPtr<ABaseCharacter> WeakCharacter(Character);
+	TrackedCharacters.Remove(WeakCharacter);
+	PendingInitialRefreshCharacters.Remove(WeakCharacter);
+
 	if (!IsValid(Character))
 	{
 		return;
 	}
 
-	if (UAscenduntHealthComponent* HealthComp = Character->GetAscenduntHealthComponent())
+	Character->SetVisionBlockerEnabled(false);
+	Character->SetXRayEnabled(false);
+	Character->SetEnemyOverlayEnabled(false);
+
+	if (UAscVisionMarkerComponent* MarkerComp = Character->GetVisionMarkerComponent())
 	{
-		HealthComp->OnHealthChanged.RemoveDynamic(this, &ThisClass::HandleTrackedHealthChanged);
-		HealthComp->OnDeathStarted.RemoveDynamic(this, &ThisClass::HandleTrackedDeathStarted);
-		HealthComp->OnDeathFinished.RemoveDynamic(this, &ThisClass::HandleTrackedDeathFinished);
+		MarkerComp->SetCriticalVisible(false);
 	}
 
-	ApplyDisabledState(Character, false);
+	if (UAscTargetStatusDisplayComponent* DisplayComp = Character->GetTargetStatusDisplayComponent())
+	{
+		DisplayComp->SetTargetHealthBarVisible(false, EAscTargetHealthBarRelation::Enemy);
+	}
 }
 
 void UAscVisionLocalPlayerSubsystem::HandleActorSpawned(AActor* SpawnedActor)
@@ -293,6 +352,30 @@ void UAscVisionLocalPlayerSubsystem::HandleActorSpawned(AActor* SpawnedActor)
 	}
 }
 
+void UAscVisionLocalPlayerSubsystem::HandleTrackedActorDestroyed(AActor* DestroyedActor)
+{
+	if (ABaseCharacter* Character = Cast<ABaseCharacter>(DestroyedActor))
+	{
+		UnregisterCharacter(Character);
+	}
+}
+
+void UAscVisionLocalPlayerSubsystem::RefreshAllVisuals()
+{
+	for (auto It = TrackedCharacters.CreateIterator(); It; ++It)
+	{
+		ABaseCharacter* Character = It->Get();
+		if (!IsValid(Character))
+		{
+			PendingInitialRefreshCharacters.Remove(*It);
+			It.RemoveCurrent();
+			continue;
+		}
+
+		RefreshVisualsForCharacter(Character);
+	}
+}
+
 void UAscVisionLocalPlayerSubsystem::RefreshVisualsForCharacter(ABaseCharacter* Character)
 {
 	if (!IsValid(Character))
@@ -300,429 +383,214 @@ void UAscVisionLocalPlayerSubsystem::RefreshVisualsForCharacter(ABaseCharacter* 
 		return;
 	}
 
-	// 렌더링되지 않는 캐릭터에 X-Ray나 적 오버레이를 적용할 이유가 없다.
-	// 오브젝트 풀에 반납된 AI가 여기 해당한다. 가드가 없으면 0.15초마다
-	// 숨겨진 액터의 머티리얼을 갱신하고 MarkRenderStateDirty를 호출하게 된다.
-	if (Character->IsHidden())
+	UAscVisionMarkerComponent* MarkerComp = Character->GetVisionMarkerComponent();
+	UAscTargetStatusDisplayComponent* DisplayComp = Character->GetTargetStatusDisplayComponent();
+
+	auto ApplyDisabled = [&]()
 	{
-		UpdateTargetHealthBar(Character, false, false);
+		Character->SetVisionBlockerEnabled(false);
+		Character->SetXRayEnabled(false);
+		Character->SetEnemyOverlayEnabled(false);
+
+		if (MarkerComp)
+		{
+			MarkerComp->SetCriticalVisible(false);
+		}
+		if (DisplayComp)
+		{
+			DisplayComp->SetTargetHealthBarVisible(false, EAscTargetHealthBarRelation::Enemy);
+		}
+	};
+
+	if (Character->IsHidden() || !CachedLocalCharacter.IsValid())
+	{
+		ApplyDisabled();
 		return;
 	}
 
-	ABaseCharacter* LocalCharacter = GetLocalBaseCharacter();
-	if (!LocalCharacter)
-	{
-		ApplyDisabledState(Character, false);
-		return;
-	}
-
-	if (Character == LocalCharacter)
-	{
-		ApplyLocalBlockerState(Character);
-		return;
-	}
-
-	UAscenduntHealthComponent* HealthComp = Character->GetAscenduntHealthComponent();
-	const bool bDeadOrDying = HealthComp ? HealthComp->IsDeadOrDying() : false;
-
-	// PvE heroes intentionally remain in DeathStarted while they are Downed.
-	// Do not treat that intermediate life state as full death for local vision/UI.
+	const UAscenduntHealthComponent* HealthComp = Character->GetAscenduntHealthComponent();
+	const bool bDeadOrDying = HealthComp && HealthComp->IsDeadOrDying();
 	const UAscPvEDownedComponent* DownedComp = Character->FindComponentByClass<UAscPvEDownedComponent>();
 	const bool bIsDowned = DownedComp && DownedComp->IsDowned();
 
 	if (bDeadOrDying && !bIsDowned)
 	{
-		ApplyDisabledState(Character, false);
+		ApplyDisabled();
 		return;
 	}
 
-	if (IsFriendlyToLocal(Character))
+	switch (GetRelationToLocal(Character))
 	{
-		const float HealthNorm = GetTargetHealthNormalized(Character);
-		const bool bShowCritical = (HealthNorm < CriticalThreshold);
-
-		if (Character->SupportsXRay())
+	case ELocalVisionRelation::Local:
+		Character->SetXRayEnabled(false);
+		Character->SetVisionBlockerEnabled(true);
+		Character->SetEnemyOverlayEnabled(false);
+		if (MarkerComp)
 		{
-			ApplyAllyXRayState(Character, HealthNorm, bShowCritical);
+			MarkerComp->SetCriticalVisible(false);
 		}
-		else
+		if (DisplayComp)
 		{
-			// AI 등 X-Ray 비지원 캐릭터는 원본 메시의 렌더 상태를 건드리지 않는다.
-			UpdateCriticalWarningScale(Character, false);
+			DisplayComp->SetTargetHealthBarVisible(false, EAscTargetHealthBarRelation::Ally);
 		}
+		break;
 
-		UpdateTargetHealthBar(Character, true, true);
-		return;
-	}
-
-	if (IsEnemyToLocal(Character))
+	case ELocalVisionRelation::Ally:
 	{
-		if (Character->SupportsEnemyOverlay())
+		float HealthNorm = 1.f;
+		bool bShowCritical = false;
+
+		if (HealthComp)
 		{
-			ApplyEnemyOverlayState(Character);
-		}
-		else
-		{
-			// PvE AI는 Enemy Overlay/X-Ray 렌더 상태를 전혀 사용하지 않는다.
-			// 체력바/타깃 UI만 기존대로 유지한다.
-			UpdateCriticalWarningScale(Character, false);
-		}
-
-		UpdateTargetHealthBar(Character, IsEnemyHealthBarRevealed(Character), false);
-		return;
-	}
-
-	ApplyDisabledState(Character, false);
-}
-
-void UAscVisionLocalPlayerSubsystem::ApplyDisabledState(ABaseCharacter* Character, bool bShowCriticalWidget)
-{
-	if (!IsValid(Character))
-	{
-		return;
-	}
-
-	SetCharacterBlockerCustomDepth(Character, false);
-	SetCharacterXRayEnabled(Character, false);
-
-	Character->SetEnemyOverlayEnabled(false);
-
-	UpdateCriticalWarningScale(Character, bShowCriticalWidget);
-	UpdateTargetHealthBar(Character, false, false);
-}
-
-void UAscVisionLocalPlayerSubsystem::ApplyLocalBlockerState(ABaseCharacter* Character)
-{
-	if (!IsValid(Character))
-	{
-		return;
-	}
-
-	SetCharacterXRayEnabled(Character, false);
-	SetCharacterBlockerCustomDepth(Character, true);
-	Character->SetEnemyOverlayEnabled(false);
-
-	if (UAscVisionMarkerComponent* MarkerComp = Character->GetVisionMarkerComponent())
-	{
-		MarkerComp->SetCriticalVisible(false);
-	}
-
-	UpdateTargetHealthBar(Character, false, false);
-}
-
-void UAscVisionLocalPlayerSubsystem::ApplyAllyXRayState(ABaseCharacter* Character, float HealthNorm, bool bShowCriticalWidget)
-{
-	if (!IsValid(Character))
-	{
-		return;
-	}
-
-	// Simulated Proxy의 원본 Body / Weapon도 CustomDepth에 기록한다.
-	// 목적:
-	// - 원본 메시가 XRayMesh를 가리는 경우 X-Ray가 위에 덮이지 않도록 차단
-	// - 벽 뒤에 있을 때는 SceneDepth와 CustomDepth가 다르므로 Blocker로 인정되지 않음
-	SetCharacterBlockerCustomDepth(Character, true);
-	Character->SetEnemyOverlayEnabled(false);
-
-	SetCharacterXRayEnabled(Character, true, HealthNorm, 1.f);
-
-	UpdateCriticalWarningScale(Character, bShowCriticalWidget);
-}
-
-void UAscVisionLocalPlayerSubsystem::ApplyEnemyOverlayState(ABaseCharacter* Character)
-{
-	if (!IsValid(Character))
-	{
-		return;
-	}
-
-	SetCharacterBlockerCustomDepth(Character, false);
-	SetCharacterXRayEnabled(Character, false);
-
-	Character->SetEnemyOverlayEnabled(true);
-
-	UpdateCriticalWarningScale(Character, false);
-}
-
-void UAscVisionLocalPlayerSubsystem::SetMeshBlockerCustomDepth(UMeshComponent* Mesh, bool bEnableCustomDepth) const
-{
-	if (!IsValid(Mesh))
-	{
-		return;
-	}
-
-	// Mesh-based X-Ray에서는 CustomDepth를 로컬 Blocker depth buffer로만 사용한다.
-	Mesh->SetRenderCustomDepth(bEnableCustomDepth);
-	Mesh->MarkRenderStateDirty();
-}
-
-void UAscVisionLocalPlayerSubsystem::SetCharacterBlockerCustomDepth(ABaseCharacter* Character, bool bEnableCustomDepth) const
-{
-	if (!IsValid(Character) || !Character->SupportsXRay())
-	{
-		return;
-	}
-
-	TArray<UMeshComponent*> VisionMeshes;
-	Character->GatherVisionMeshes(VisionMeshes);
-
-	for (UMeshComponent* Mesh : VisionMeshes)
-	{
-		SetMeshBlockerCustomDepth(Mesh, bEnableCustomDepth);
-	}
-}
-
-void UAscVisionLocalPlayerSubsystem::SetMeshXRayEnabled(UMeshComponent* Mesh, bool bEnabled, float HealthNorm, float XRayAlpha) const
-{
-	if (!IsValid(Mesh))
-	{
-		return;
-	}
-
-	// 머티리얼은 BaseCharacter / Weapon 쪽에서 초기화한다.
-	// Subsystem은 X-Ray 표시 상태와 per-mesh 데이터만 갱신해야 한다.
-	Mesh->SetVisibility(bEnabled, true);
-	Mesh->SetHiddenInGame(!bEnabled, true);
-	Mesh->SetRenderCustomDepth(false);
-
-	Mesh->SetCustomPrimitiveDataFloat(XRayHealthPrimitiveDataIndex, FMath::Clamp(HealthNorm, 0.f, 1.f));
-	Mesh->SetCustomPrimitiveDataFloat(XRayAlphaPrimitiveDataIndex, FMath::Clamp(XRayAlpha, 0.f, 1.f));
-	Mesh->MarkRenderStateDirty();
-}
-
-void UAscVisionLocalPlayerSubsystem::SetCharacterXRayEnabled(ABaseCharacter* Character, bool bEnabled, float HealthNorm, float XRayAlpha) const
-{
-	if (!IsValid(Character) || !Character->SupportsXRay())
-	{
-		return;
-	}
-
-	TArray<UMeshComponent*> XRayMeshes;
-	Character->GatherXRayMeshes(XRayMeshes);
-
-	for (UMeshComponent* Mesh : XRayMeshes)
-	{
-		SetMeshXRayEnabled(Mesh, bEnabled, HealthNorm, XRayAlpha);
-	}
-}
-
-float UAscVisionLocalPlayerSubsystem::ComputeCriticalWarningScale(const ABaseCharacter* Target) const
-{
-	if (!IsValid(Target))
-	{
-		return CriticalScaleMax;
-	}
-
-	APlayerController* PC = CachedPlayerController.Get();
-	if (!PC)
-	{
-		if (ULocalPlayer* LP = GetLocalPlayer())
-		{
-			PC = LP->GetPlayerController(GetWorld());
-		}
-	}
-
-	if (!IsValid(PC))
-	{
-		return CriticalScaleMax;
-	}
-
-	FVector ViewLocation;
-	FRotator ViewRotation;
-	PC->GetPlayerViewPoint(ViewLocation, ViewRotation);
-
-	const float Distance = FVector::Dist(ViewLocation, Target->GetActorLocation());
-
-	const float Alpha = FMath::GetRangePct(
-		CriticalScaleNearDistance,
-		CriticalScaleFarDistance,
-		Distance);
-
-	const float ClampedAlpha = FMath::Clamp(Alpha, 0.f, 1.f);
-
-	return FMath::Lerp(CriticalScaleMax, CriticalScaleMin, ClampedAlpha);
-}
-
-void UAscVisionLocalPlayerSubsystem::UpdateCriticalWarningScale(ABaseCharacter* Character, bool bShowCriticalWidget) const
-{
-	if (!IsValid(Character))
-	{
-		return;
-	}
-
-	if (UAscVisionMarkerComponent* MarkerComp = Character->GetVisionMarkerComponent())
-	{
-		MarkerComp->SetCriticalVisible(bShowCriticalWidget);
-	}
-
-	if (!bShowCriticalWidget)
-	{
-		Character->SetCriticalWarningScale(CriticalScaleMax);
-		return;
-	}
-
-	const float Scale = ComputeCriticalWarningScale(Character);
-	Character->SetCriticalWarningScale(Scale);
-}
-
-ABaseCharacter* UAscVisionLocalPlayerSubsystem::GetLocalBaseCharacter() const
-{
-	APlayerController* PC = CachedPlayerController.Get();
-	if (!PC)
-	{
-		if (ULocalPlayer* LP = GetLocalPlayer())
-		{
-			PC = LP->GetPlayerController(GetWorld());
-		}
-	}
-
-	return PC ? Cast<ABaseCharacter>(PC->GetPawn()) : nullptr;
-}
-
-bool UAscVisionLocalPlayerSubsystem::IsFriendlyToLocal(const ABaseCharacter* Target) const
-{
-	const ABaseCharacter* LocalCharacter = GetLocalBaseCharacter();
-	if (!LocalCharacter || !Target || LocalCharacter == Target)
-	{
-		return false;
-	}
-
-	if (!IsPlayerCharacter(Target) && bTreatNonPlayerCharactersAsHostile)
-	{
-		return false;
-	}
-
-	const uint8 LocalTeamId = LocalCharacter->GetGenericTeamId().GetId();
-	const uint8 TargetTeamId = Target->GetGenericTeamId().GetId();
-
-	return (LocalTeamId == TargetTeamId);
-}
-
-bool UAscVisionLocalPlayerSubsystem::IsEnemyToLocal(const ABaseCharacter* Target) const
-{
-	const ABaseCharacter* LocalCharacter = GetLocalBaseCharacter();
-	if (!LocalCharacter || !Target || LocalCharacter == Target)
-	{
-		return false;
-	}
-
-	if (!IsPlayerCharacter(Target) && bTreatNonPlayerCharactersAsHostile)
-	{
-		return true;
-	}
-
-	return !IsFriendlyToLocal(Target);
-}
-
-bool UAscVisionLocalPlayerSubsystem::IsPlayerCharacter(const ABaseCharacter* Target) const
-{
-	return Target && IsValid(Target->GetPlayerState());
-}
-
-float UAscVisionLocalPlayerSubsystem::GetTargetHealthNormalized(const ABaseCharacter* Character) const
-{
-	if (!Character)
-	{
-		return 1.f;
-	}
-
-	if (const UAscenduntHealthComponent* HealthComp = Character->GetAscenduntHealthComponent())
-	{
-		// Replication can expose the HealthSet object before its max-health attributes arrive.
-		// A missing set or a zero display capacity means "unknown yet", not 0 HP.
-		FAscenduntHealthSnapshot Snapshot;
-		if (!HealthComp->GetHealthSnapshot(Snapshot))
-		{
-			return 1.f;
+			FAscenduntHealthSnapshot Snapshot;
+			if (HealthComp->GetHealthSnapshot(Snapshot))
+			{
+				const float Capacity = Snapshot.GetDisplayCapacityTotal();
+				if (Capacity > KINDA_SMALL_NUMBER)
+				{
+					HealthNorm = FMath::Clamp(Snapshot.GetCurrentTotal() / Capacity, 0.f, 1.f);
+					bShowCritical = Character->SupportsXRay() && HealthNorm < CriticalHealthThreshold;
+				}
+			}
 		}
 
-		const float Capacity = Snapshot.GetDisplayCapacityTotal();
-		if (Capacity <= KINDA_SMALL_NUMBER)
+		Character->SetVisionBlockerEnabled(true);
+		Character->SetEnemyOverlayEnabled(false);
+		Character->SetXRayEnabled(true, HealthNorm);
+
+		if (MarkerComp)
 		{
-			return 1.f;
+			MarkerComp->SetCriticalVisibleForViewer(bShowCritical, CachedPlayerController.Get());
 		}
-
-		return FMath::Clamp(Snapshot.GetCurrentTotal() / Capacity, 0.f, 1.f);
+		if (DisplayComp)
+		{
+			DisplayComp->SetTargetHealthBarVisible(true, EAscTargetHealthBarRelation::Ally);
+		}
+		break;
 	}
 
-	return 1.f;
+	case ELocalVisionRelation::Enemy:
+		Character->SetVisionBlockerEnabled(false);
+		Character->SetXRayEnabled(false);
+		Character->SetEnemyOverlayEnabled(true);
+		if (MarkerComp)
+		{
+			MarkerComp->SetCriticalVisible(false);
+		}
+		if (DisplayComp)
+		{
+			const bool bRevealHealthBar = CachedTargetAwarenessComponent.IsValid() &&
+				CachedTargetAwarenessComponent->IsTargetRevealed(Character);
+			DisplayComp->SetTargetHealthBarVisible(bRevealHealthBar, EAscTargetHealthBarRelation::Enemy);
+		}
+		break;
+
+	default:
+		ApplyDisabled();
+		break;
+	}
 }
 
-bool UAscVisionLocalPlayerSubsystem::IsEnemyHealthBarRevealed(const ABaseCharacter* Target) const
+UAscVisionLocalPlayerSubsystem::ELocalVisionRelation
+UAscVisionLocalPlayerSubsystem::GetRelationToLocal(const ABaseCharacter* Target) const
 {
-	return CachedTargetAwarenessComponent.IsValid() &&
-		CachedTargetAwarenessComponent->IsTargetRevealed(Target);
+	const ABaseCharacter* LocalCharacter = CachedLocalCharacter.Get();
+	if (!IsValid(LocalCharacter) || !IsValid(Target))
+	{
+		return ELocalVisionRelation::Invalid;
+	}
+
+	if (LocalCharacter == Target)
+	{
+		return ELocalVisionRelation::Local;
+	}
+
+	if (!IsValid(Target->GetPlayerState()))
+	{
+		return ELocalVisionRelation::Enemy;
+	}
+
+	return LocalCharacter->GetGenericTeamId() == Target->GetGenericTeamId()
+		? ELocalVisionRelation::Ally
+		: ELocalVisionRelation::Enemy;
 }
 
-void UAscVisionLocalPlayerSubsystem::UpdateTargetHealthBar(
-	ABaseCharacter* Character, bool bShouldShow, bool bFriendly) const
-{
-	if (!IsValid(Character))
-	{
-		return;
-	}
-
-	UAscTargetStatusDisplayComponent* DisplayComponent =
-		UAscTargetStatusDisplayComponent::FindTargetStatusDisplayComponent(Character);
-	if (!DisplayComponent)
-	{
-		return;
-	}
-
-	if (!bShouldShow)
-	{
-		DisplayComponent->ClearTargetHealthBar();
-		return;
-	}
-
-	const UAscenduntHealthComponent* HealthComponent = Character->GetAscenduntHealthComponent();
-	FAscenduntHealthSnapshot Snapshot;
-	if (!HealthComponent || !HealthComponent->GetHealthSnapshot(Snapshot) ||
-		Snapshot.GetDisplayCapacityTotal() <= KINDA_SMALL_NUMBER)
-	{
-		// Do not render an uninitialized replicated health state as a real 0 / 0 bar.
-		DisplayComponent->ClearTargetHealthBar();
-		return;
-	}
-
-	DisplayComponent->SetTargetHealthBar(
-		Snapshot,
-		bFriendly ? EAscTargetHealthBarRelation::Ally : EAscTargetHealthBarRelation::Enemy);
-}
-
-void UAscVisionLocalPlayerSubsystem::HandleLocalTeamChanged(uint8 OldTeamId, uint8 NewTeamId)
+void UAscVisionLocalPlayerSubsystem::HandleLocalTeamChanged(uint8, uint8)
 {
 	RefreshAllVisuals();
 }
 
 void UAscVisionLocalPlayerSubsystem::HandleObservedTargetsChanged()
 {
+	for (const TWeakObjectPtr<ABaseCharacter>& WeakCharacter : TrackedCharacters)
+	{
+		ABaseCharacter* Character = WeakCharacter.Get();
+		if (!IsValid(Character) || GetRelationToLocal(Character) != ELocalVisionRelation::Enemy)
+		{
+			continue;
+		}
+
+		if (UAscTargetStatusDisplayComponent* DisplayComp = Character->GetTargetStatusDisplayComponent())
+		{
+			const UAscenduntHealthComponent* HealthComp = Character->GetAscenduntHealthComponent();
+			const bool bDeadOrDying = HealthComp && HealthComp->IsDeadOrDying();
+			const UAscPvEDownedComponent* DownedComp = Character->FindComponentByClass<UAscPvEDownedComponent>();
+			const bool bIsDowned = DownedComp && DownedComp->IsDowned();
+
+			const bool bRevealHealthBar = !Character->IsHidden() &&
+				(!bDeadOrDying || bIsDowned) &&
+				CachedTargetAwarenessComponent.IsValid() &&
+				CachedTargetAwarenessComponent->IsTargetRevealed(Character);
+			DisplayComp->SetTargetHealthBarVisible(bRevealHealthBar, EAscTargetHealthBarRelation::Enemy);
+		}
+	}
+}
+
+void UAscVisionLocalPlayerSubsystem::HandleTrackedWeaponChanged(
+	AAscenduntWeapon* NewWeapon,
+	AAscenduntWeapon* PreviousWeapon)
+{
+	AActor* WeaponOwner = IsValid(NewWeapon)
+		? NewWeapon->GetOwner()
+		: (IsValid(PreviousWeapon) ? PreviousWeapon->GetOwner() : nullptr);
+
+	if (ABaseCharacter* Character = Cast<ABaseCharacter>(WeaponOwner))
+	{
+		RefreshVisualsForCharacter(Character);
+	}
+}
+
+void UAscVisionLocalPlayerSubsystem::HandleTrackedDownedStateChanged(bool)
+{
 	RefreshAllVisuals();
+}
+
+void UAscVisionLocalPlayerSubsystem::HandleTrackedPooledActiveChanged(
+	ABaseAICharacter* Character,
+	bool)
+{
+	RefreshVisualsForCharacter(Character);
 }
 
 void UAscVisionLocalPlayerSubsystem::HandleTrackedHealthChanged(
 	UAscenduntHealthComponent* HealthComponent,
 	AActor* OwningActor,
-	AActor* Instigator,
-	bool bWasDamaging,
-	float RawValue,
-	const FAscenduntHealthSnapshot& HealthSnapshot)
+	AActor*,
+	bool,
+	float,
+	const FAscenduntHealthSnapshot&)
 {
-	if (ABaseCharacter* Character = Cast<ABaseCharacter>(OwningActor))
-	{
-		RefreshVisualsForCharacter(Character);
-	}
+	if (!IsValid(HealthComponent)) return;
+
+	ABaseCharacter* Character =
+		Cast<ABaseCharacter>(HealthComponent->GetOwner());
+
+	if (!IsValid(Character)) return;
+
+	RefreshVisualsForCharacter(Character);
 }
 
-void UAscVisionLocalPlayerSubsystem::HandleTrackedDeathStarted(AActor* OwningActor)
-{
-	if (ABaseCharacter* Character = Cast<ABaseCharacter>(OwningActor))
-	{
-		RefreshVisualsForCharacter(Character);
-	}
-}
-
-void UAscVisionLocalPlayerSubsystem::HandleTrackedDeathFinished(AActor* OwningActor)
+void UAscVisionLocalPlayerSubsystem::HandleTrackedLifeStateChanged(AActor* OwningActor)
 {
 	if (ABaseCharacter* Character = Cast<ABaseCharacter>(OwningActor))
 	{
