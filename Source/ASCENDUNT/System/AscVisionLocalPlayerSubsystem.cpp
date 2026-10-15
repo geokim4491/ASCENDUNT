@@ -5,7 +5,6 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
-#include "TimerManager.h"
 #include "GameFramework/PlayerController.h"
 
 #include "ASCENDUNT/Character/AI/BaseAICharacter.h"
@@ -49,8 +48,7 @@ void UAscVisionLocalPlayerSubsystem::PlayerControllerChanged(APlayerController* 
 {
 	Super::PlayerControllerChanged(NewPlayerController);
 
-	RefreshLocalContext();
-	RefreshAllVisuals();
+	NotifyLocalContextChanged();
 }
 
 void UAscVisionLocalPlayerSubsystem::HandlePostWorldInit(
@@ -82,17 +80,15 @@ void UAscVisionLocalPlayerSubsystem::AttachToWorld(UWorld* World)
 	{
 		RegisterCharacter(*It);
 	}
-
-	World->GetTimerManager().SetTimer(
-		MaintenanceTimerHandle,
-		this,
-		&ThisClass::HandleMaintenanceTick,
-		MaintenanceInterval,
-		true);
 }
 
 void UAscVisionLocalPlayerSubsystem::DetachFromWorld()
 {
+	if (APlayerController* OldPC = CachedPlayerController.Get())
+	{
+		OldPC->OnPossessedPawnChanged.RemoveDynamic(this, &ThisClass::HandleLocalPawnChanged);
+	}
+
 	if (CachedTargetAwarenessComponent.IsValid())
 	{
 		CachedTargetAwarenessComponent->OnObservedTargetsChanged.RemoveAll(this);
@@ -110,8 +106,6 @@ void UAscVisionLocalPlayerSubsystem::DetachFromWorld()
 			World->RemoveOnActorSpawnedHandler(ActorSpawnedHandle);
 			ActorSpawnedHandle.Reset();
 		}
-
-		World->GetTimerManager().ClearTimer(MaintenanceTimerHandle);
 	}
 
 	TArray<ABaseCharacter*> CharactersToUnregister;
@@ -130,7 +124,6 @@ void UAscVisionLocalPlayerSubsystem::DetachFromWorld()
 	}
 
 	TrackedCharacters.Reset();
-	PendingInitialRefreshCharacters.Reset();
 	BoundWorld.Reset();
 	CachedPlayerController.Reset();
 	CachedLocalPlayerState.Reset();
@@ -150,7 +143,17 @@ bool UAscVisionLocalPlayerSubsystem::RefreshLocalContext()
 
 	if (CachedPlayerController.Get() != NewPC)
 	{
+		if (APlayerController* OldPC = CachedPlayerController.Get())
+		{
+			OldPC->OnPossessedPawnChanged.RemoveDynamic(this, &ThisClass::HandleLocalPawnChanged);
+		}
+
 		CachedPlayerController = NewPC;
+		if (NewPC)
+		{
+			NewPC->OnPossessedPawnChanged.AddUniqueDynamic(this, &ThisClass::HandleLocalPawnChanged);
+		}
+
 		bChanged = true;
 	}
 
@@ -204,32 +207,6 @@ bool UAscVisionLocalPlayerSubsystem::RefreshLocalContext()
 	return bChanged;
 }
 
-void UAscVisionLocalPlayerSubsystem::HandleMaintenanceTick()
-{
-	if (RefreshLocalContext())
-	{
-		RefreshAllVisuals();
-	}
-
-	for (auto It = PendingInitialRefreshCharacters.CreateIterator(); It; ++It)
-	{
-		ABaseCharacter* Character = It->Get();
-		if (!IsValid(Character))
-		{
-			It.RemoveCurrent();
-			continue;
-		}
-
-		if (!Character->HasActorBegunPlay())
-		{
-			continue;
-		}
-
-		RefreshVisualsForCharacter(Character);
-		It.RemoveCurrent();
-	}
-}
-
 void UAscVisionLocalPlayerSubsystem::RegisterCharacter(ABaseCharacter* Character)
 {
 	if (!IsValid(Character))
@@ -280,10 +257,6 @@ void UAscVisionLocalPlayerSubsystem::RegisterCharacter(ABaseCharacter* Character
 	{
 		RefreshVisualsForCharacter(Character);
 	}
-	else
-	{
-		PendingInitialRefreshCharacters.Add(WeakCharacter);
-	}
 }
 
 void UAscVisionLocalPlayerSubsystem::UnregisterCharacter(ABaseCharacter* Character)
@@ -322,7 +295,6 @@ void UAscVisionLocalPlayerSubsystem::UnregisterCharacter(ABaseCharacter* Charact
 
 	const TWeakObjectPtr<ABaseCharacter> WeakCharacter(Character);
 	TrackedCharacters.Remove(WeakCharacter);
-	PendingInitialRefreshCharacters.Remove(WeakCharacter);
 
 	if (!IsValid(Character))
 	{
@@ -367,7 +339,6 @@ void UAscVisionLocalPlayerSubsystem::RefreshAllVisuals()
 		ABaseCharacter* Character = It->Get();
 		if (!IsValid(Character))
 		{
-			PendingInitialRefreshCharacters.Remove(*It);
 			It.RemoveCurrent();
 			continue;
 		}
@@ -513,6 +484,49 @@ UAscVisionLocalPlayerSubsystem::GetRelationToLocal(const ABaseCharacter* Target)
 	return LocalCharacter->GetGenericTeamId() == Target->GetGenericTeamId()
 		? ELocalVisionRelation::Ally
 		: ELocalVisionRelation::Enemy;
+}
+
+void UAscVisionLocalPlayerSubsystem::NotifyLocalContextChanged()
+{
+	if (RefreshLocalContext())
+	{
+		RefreshAllVisuals();
+	}
+}
+
+void UAscVisionLocalPlayerSubsystem::HandleLocalPawnChanged(APawn*, APawn*)
+{
+	NotifyLocalContextChanged();
+}
+
+void UAscVisionLocalPlayerSubsystem::NotifyCharacterBeganPlay(ABaseCharacter* Character)
+{
+	if (!IsValid(Character) || Character->GetWorld() != BoundWorld.Get())
+	{
+		return;
+	}
+
+	const TWeakObjectPtr<ABaseCharacter> WeakCharacter(Character);
+	if (!TrackedCharacters.Contains(WeakCharacter))
+	{
+		RegisterCharacter(Character);
+		// Registration already refreshes characters that have completed BeginPlay.
+		if (Character->HasActorBegunPlay())
+		{
+			return;
+		}
+	}
+
+	RefreshVisualsForCharacter(Character);
+}
+
+void UAscVisionLocalPlayerSubsystem::NotifyCharacterPlayerStateChanged(ABaseCharacter* Character)
+{
+	if (IsValid(Character) &&
+		TrackedCharacters.Contains(TWeakObjectPtr<ABaseCharacter>(Character)))
+	{
+		RefreshVisualsForCharacter(Character);
+	}
 }
 
 void UAscVisionLocalPlayerSubsystem::HandleLocalTeamChanged(uint8, uint8)

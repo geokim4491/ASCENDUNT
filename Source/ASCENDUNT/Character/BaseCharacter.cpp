@@ -10,12 +10,15 @@
 #include "UObject/ConstructorHelpers.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "ASCENDUNT/System/AscCollisionChannels.h"
+#include "ASCENDUNT/System/AscVisionLocalPlayerSubsystem.h"
 #include "ASCENDUNT/Character/AscenduntCharacterMovementComponent.h"
 #include "ASCENDUNT/Character/AscenduntHealthComponent.h"
 #include "ASCENDUNT/Character/AscVisionMarkerComponent.h"
 #include "ASCENDUNT/Character/AscTargetStatusDisplayComponent.h"
 #include "ASCENDUNT/UI/WorldStatus/AscWorldStatusLayoutData.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
 #include "ReferenceSkeleton.h"
 
 #include "Net/UnrealNetwork.h"
@@ -516,6 +519,17 @@ void ABaseCharacter::BeginPlay()
 	}
 
 	SyncXRayBodyMesh();
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		for (ULocalPlayer* LocalPlayer : GameInstance->GetLocalPlayers())
+		{
+			if (UAscVisionLocalPlayerSubsystem* Vision = LocalPlayer->GetSubsystem<UAscVisionLocalPlayerSubsystem>())
+			{
+				Vision->NotifyCharacterBeganPlay(this);
+			}
+		}
+	}
 	
 	if (false) // 복제 테스트 할 때, 키기
 	{
