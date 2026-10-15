@@ -7,6 +7,7 @@
 #include "ASCENDUNT/AbilitySystem/Attributes/AscenduntCharacterStatSet.h"
 #include "ASCENDUNT/Player/AscenduntPlayerState.h"
 #include "ASCENDUNT/Player/AscenduntPlayerController.h"
+#include "ASCENDUNT/System/AscVisionLocalPlayerSubsystem.h"
 #include "ASCENDUNT/Input/AscenduntEnhancedInputComponent.h"
 #include "ASCENDUNT/Camera/AscenduntCameraComponent.h"
 #include "ASCENDUNT/Character/Hero/HeroCameraComponent.h"
@@ -30,6 +31,8 @@
 #include "Animation/AnimInstance.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Engine/World.h"
+#include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
 
 #include "Components/WidgetComponent.h"
 #include "Blueprint/UserWidget.h"
@@ -585,6 +588,17 @@ void AHeroCharacter::OnRep_PlayerState()
 	if (HeroInitComponent)
 	{
 		HeroInitComponent->NotifyPlayerStateChanged();
+	}
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		for (ULocalPlayer* LocalPlayer : GameInstance->GetLocalPlayers())
+		{
+			if (UAscVisionLocalPlayerSubsystem* Vision = LocalPlayer->GetSubsystem<UAscVisionLocalPlayerSubsystem>())
+			{
+				Vision->NotifyCharacterPlayerStateChanged(this);
+			}
+		}
 	}
 }
 

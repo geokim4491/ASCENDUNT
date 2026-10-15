@@ -24,6 +24,11 @@ public:
 	virtual void Deinitialize() override;
 	virtual void PlayerControllerChanged(APlayerController* NewPlayerController) override;
 
+	// Re-evaluate visuals only when the local controller, PlayerState or Pawn changes.
+	void NotifyLocalContextChanged();
+	void NotifyCharacterBeganPlay(ABaseCharacter* Character);
+	void NotifyCharacterPlayerStateChanged(ABaseCharacter* Character);
+
 private:
 	enum class ELocalVisionRelation : uint8
 	{
@@ -33,14 +38,12 @@ private:
 		Enemy
 	};
 
-	static constexpr float MaintenanceInterval = 0.15f;
 	static constexpr float CriticalHealthThreshold = 0.4f;
 
 	void HandlePostWorldInit(UWorld* World, const UWorld::InitializationValues);
 	void AttachToWorld(UWorld* World);
 	void DetachFromWorld();
 	bool RefreshLocalContext();
-	void HandleMaintenanceTick();
 
 
 	void RegisterCharacter(ABaseCharacter* Character);
@@ -75,9 +78,12 @@ private:
 	UFUNCTION()
 	void HandleTrackedLifeStateChanged(AActor* OwningActor);
 
+	UFUNCTION()
+	void HandleLocalPawnChanged(
+		APawn* OldPawn, APawn* NewPawn);
+
 private:
 	TSet<TWeakObjectPtr<ABaseCharacter>> TrackedCharacters;
-	TSet<TWeakObjectPtr<ABaseCharacter>> PendingInitialRefreshCharacters;
 
 	TWeakObjectPtr<UWorld> BoundWorld;
 	TWeakObjectPtr<APlayerController> CachedPlayerController;
@@ -87,5 +93,4 @@ private:
 
 	FDelegateHandle PostWorldInitHandle;
 	FDelegateHandle ActorSpawnedHandle;
-	FTimerHandle MaintenanceTimerHandle;
 };

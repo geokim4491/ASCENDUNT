@@ -1,6 +1,7 @@
 #include "AscenduntPlayerController.h"
 
 #include "AscenduntPlayerState.h"
+#include "ASCENDUNT/System/AscVisionLocalPlayerSubsystem.h"
 #include "ASCENDUNT/Player/AscTargetAwarenessComponent.h"
 #include "ASCENDUNT/GameModes/PVP/MatchGameState.h"
 #include "ASCENDUNT/GameModes/PVP/MatchGameMode.h"
@@ -22,6 +23,7 @@
 #include "GameFramework/GameModeBase.h"
 #include "Blueprint/UserWidget.h"
 #include "Engine/World.h"
+#include "Engine/LocalPlayer.h"
 #include "GenericTeamAgentInterface.h"
 #include "InputCoreTypes.h"
 #include "GameFramework/PawnMovementComponent.h"
@@ -180,6 +182,17 @@ void AAscenduntPlayerController::OnRep_Pawn()
 void AAscenduntPlayerController::OnRep_PlayerState()
 {
     Super::OnRep_PlayerState();
+
+    if (IsLocalController())
+    {
+        if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
+        {
+            if (UAscVisionLocalPlayerSubsystem* Vision = LocalPlayer->GetSubsystem<UAscVisionLocalPlayerSubsystem>())
+            {
+                Vision->NotifyLocalContextChanged();
+            }
+        }
+    }
 
     if (!IsLocalController() || !IsMatchMap())
     {
