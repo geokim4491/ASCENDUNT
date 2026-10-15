@@ -3,9 +3,13 @@
 #include "AscVisionLocalPlayerSubsystem.h"
 
 #include "Engine/LocalPlayer.h"
+#include "Engine/AssetManager.h"
+#include "Engine/StreamableManager.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
+#include "Components/MeshComponent.h"
+#include "Materials/MaterialInterface.h"
 
 #include "ASCENDUNT/Character/AI/BaseAICharacter.h"
 #include "ASCENDUNT/Character/AscenduntHealthComponent.h"
@@ -19,12 +23,22 @@
 #include "ASCENDUNT/Weapon/AscenduntWeapon.h"
 #include "ASCENDUNT/Weapon/WeaponEquipmentComponent.h"
 
+UAscVisionLocalPlayerSubsystem::UAscVisionLocalPlayerSubsystem()
+{
+	XRayMaterial = TSoftObjectPtr<UMaterialInterface>(
+		FSoftObjectPath(TEXT("/Game/Materials/M_XRayMesh_Ally.M_XRayMesh_Ally")));
+	XRayHiddenMaterial = TSoftObjectPtr<UMaterialInterface>(
+		FSoftObjectPath(TEXT("/Game/Materials/M_XRayHidden.M_XRayHidden")));
+}
+
 void UAscVisionLocalPlayerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
 	PostWorldInitHandle = FWorldDelegates::OnPostWorldInitialization.AddUObject(
 		this, &ThisClass::HandlePostWorldInit);
+	WorldCleanupHandle = FWorldDelegates::OnWorldCleanup.AddUObject(
+		this, &ThisClass::HandleWorldCleanup);
 
 	if (UWorld* World = GetWorld())
 	{
@@ -38,6 +52,11 @@ void UAscVisionLocalPlayerSubsystem::Deinitialize()
 	{
 		FWorldDelegates::OnPostWorldInitialization.Remove(PostWorldInitHandle);
 		PostWorldInitHandle.Reset();
+	}
+	if (WorldCleanupHandle.IsValid())
+	{
+		FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
+		WorldCleanupHandle.Reset();
 	}
 
 	DetachFromWorld();
@@ -80,10 +99,37 @@ void UAscVisionLocalPlayerSubsystem::AttachToWorld(UWorld* World)
 	{
 		RegisterCharacter(*It);
 	}
+
+	// Match the controller's menu-map rule, including PIE's prefixed map names.
+	if (World->IsGameWorld() && World->GetNetMode() != NM_DedicatedServer &&
+		!World->GetMapName().Contains(TEXT("L_MainMenu")))
+	{
+		LoadXRayMaterials();
+	}
+}
+
+void UAscVisionLocalPlayerSubsystem::HandleWorldCleanup(UWorld* World, bool, bool)
+{
+	if (World && World == BoundWorld.Get())
+	{
+		// Release the cache before travel's garbage collection, not after the next world attaches.
+		DetachFromWorld();
+	}
 }
 
 void UAscVisionLocalPlayerSubsystem::DetachFromWorld()
 {
+	// Invalidate callbacks first, including any completion already queued on the game thread.
+	const TWeakObjectPtr<UWorld> PreviousWorld = BoundWorld;
+	BoundWorld.Reset();
+	if (XRayMaterialsLoadHandle.IsValid())
+	{
+		XRayMaterialsLoadHandle->CancelHandle();
+		XRayMaterialsLoadHandle.Reset();
+	}
+	LoadedXRayMaterial = nullptr;
+	LoadedXRayHiddenMaterial = nullptr;
+
 	if (APlayerController* OldPC = CachedPlayerController.Get())
 	{
 		OldPC->OnPossessedPawnChanged.RemoveDynamic(this, &ThisClass::HandleLocalPawnChanged);
@@ -99,14 +145,14 @@ void UAscVisionLocalPlayerSubsystem::DetachFromWorld()
 		CachedLocalPlayerState->OnTeamIdChanged.RemoveAll(this);
 	}
 
-	if (UWorld* World = BoundWorld.Get())
+	if (UWorld* World = PreviousWorld.Get())
 	{
 		if (ActorSpawnedHandle.IsValid())
 		{
 			World->RemoveOnActorSpawnedHandler(ActorSpawnedHandle);
-			ActorSpawnedHandle.Reset();
 		}
 	}
+	ActorSpawnedHandle.Reset();
 
 	TArray<ABaseCharacter*> CharactersToUnregister;
 	CharactersToUnregister.Reserve(TrackedCharacters.Num());
@@ -124,7 +170,6 @@ void UAscVisionLocalPlayerSubsystem::DetachFromWorld()
 	}
 
 	TrackedCharacters.Reset();
-	BoundWorld.Reset();
 	CachedPlayerController.Reset();
 	CachedLocalPlayerState.Reset();
 	CachedLocalCharacter.Reset();
@@ -349,7 +394,8 @@ void UAscVisionLocalPlayerSubsystem::RefreshAllVisuals()
 
 void UAscVisionLocalPlayerSubsystem::RefreshVisualsForCharacter(ABaseCharacter* Character)
 {
-	if (!IsValid(Character))
+	if (!IsValid(Character) || !Character->HasActorBegunPlay() ||
+		Character->GetWorld() != BoundWorld.Get())
 	{
 		return;
 	}
@@ -427,6 +473,7 @@ void UAscVisionLocalPlayerSubsystem::RefreshVisualsForCharacter(ABaseCharacter* 
 
 		Character->SetVisionBlockerEnabled(true);
 		Character->SetEnemyOverlayEnabled(false);
+		PrepareXRayMaterials(Character);
 		Character->SetXRayEnabled(true, HealthNorm);
 
 		if (MarkerComp)
@@ -460,6 +507,69 @@ void UAscVisionLocalPlayerSubsystem::RefreshVisualsForCharacter(ABaseCharacter* 
 		ApplyDisabled();
 		break;
 	}
+}
+
+void UAscVisionLocalPlayerSubsystem::PrepareXRayMaterials(ABaseCharacter* Character)
+{
+	if (!Character->SupportsXRay())
+	{
+		return;
+	}
+
+	// This path only applies the world cache; character events never start asset loads.
+	Character->SetXRayMaterials(LoadedXRayMaterial, LoadedXRayHiddenMaterial);
+
+	TArray<UMeshComponent*> Meshes;
+	Character->GatherXRayMeshes(Meshes);
+	for (UMeshComponent* Mesh : Meshes)
+	{
+		AAscenduntWeapon* Weapon = IsValid(Mesh) ? Cast<AAscenduntWeapon>(Mesh->GetOwner()) : nullptr;
+		if (IsValid(Weapon) && Weapon->HasActorBegunPlay())
+		{
+			Weapon->SetXRayMaterial(LoadedXRayMaterial);
+		}
+	}
+}
+
+void UAscVisionLocalPlayerSubsystem::LoadXRayMaterials()
+{
+	if (XRayMaterialsLoadHandle.IsValid() ||
+		(IsValid(LoadedXRayMaterial) && IsValid(LoadedXRayHiddenMaterial)))
+	{
+		return;
+	}
+
+	const TArray<FSoftObjectPath> Paths = {
+		XRayMaterial.ToSoftObjectPath(), XRayHiddenMaterial.ToSoftObjectPath()
+	};
+	XRayMaterialsLoadHandle = UAssetManager::GetStreamableManager().RequestAsyncLoad(
+		Paths, FStreamableDelegate::CreateUObject(this, &ThisClass::HandleXRayMaterialsLoaded, BoundWorld));
+	if (!XRayMaterialsLoadHandle.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Vision] Could not request shared X-Ray materials for %s"),
+			*GetNameSafe(BoundWorld.Get()));
+	}
+}
+
+void UAscVisionLocalPlayerSubsystem::HandleXRayMaterialsLoaded(TWeakObjectPtr<UWorld> LoadingWorld)
+{
+	if (!LoadingWorld.IsValid() || LoadingWorld != BoundWorld)
+	{
+		return;
+	}
+
+	// Hold strong references before releasing the streamable handle.
+	LoadedXRayMaterial = XRayMaterial.Get();
+	LoadedXRayHiddenMaterial = XRayHiddenMaterial.Get();
+	XRayMaterialsLoadHandle.Reset();
+	if (!IsValid(LoadedXRayMaterial) || !IsValid(LoadedXRayHiddenMaterial))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Vision] Failed to load shared X-Ray materials for %s"),
+			*GetNameSafe(BoundWorld.Get()));
+	}
+
+	// A single refresh after preload; future BeginPlay/weapon/context events use this cache.
+	RefreshAllVisuals();
 }
 
 UAscVisionLocalPlayerSubsystem::ELocalVisionRelation
@@ -526,6 +636,22 @@ void UAscVisionLocalPlayerSubsystem::NotifyCharacterPlayerStateChanged(ABaseChar
 		TrackedCharacters.Contains(TWeakObjectPtr<ABaseCharacter>(Character)))
 	{
 		RefreshVisualsForCharacter(Character);
+	}
+}
+
+void UAscVisionLocalPlayerSubsystem::NotifyWeaponBeganPlay(AAscenduntWeapon* Weapon)
+{
+	if (!IsValid(Weapon) || Weapon->GetWorld() != BoundWorld.Get())
+	{
+		return;
+	}
+
+	if (ABaseCharacter* Character = Cast<ABaseCharacter>(Weapon->GetOwner()))
+	{
+		if (TrackedCharacters.Contains(TWeakObjectPtr<ABaseCharacter>(Character)))
+		{
+			RefreshVisualsForCharacter(Character);
+		}
 	}
 }
 

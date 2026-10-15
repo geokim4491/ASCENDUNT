@@ -11,6 +11,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "ASCENDUNT/System/AscCollisionChannels.h"
 #include "ASCENDUNT/System/AscVisionLocalPlayerSubsystem.h"
+#include "ASCENDUNT/Weapon/AscenduntWeapon.h"
 #include "ASCENDUNT/Character/AscenduntCharacterMovementComponent.h"
 #include "ASCENDUNT/Character/AscenduntHealthComponent.h"
 #include "ASCENDUNT/Character/AscVisionMarkerComponent.h"
@@ -29,7 +30,6 @@
 #include "Engine/Engine.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
-#include "ASCENDUNT/Weapon/AscenduntWeapon.h"
 #include "ASCENDUNT/Weapon/WeaponEquipmentComponent.h"
 
 namespace AscBodyAimDebug
@@ -185,42 +185,25 @@ UAscenduntHealthComponent* ABaseCharacter::GetAscenduntHealthComponent() const
 
 void ABaseCharacter::InitializeVisionPresentationSupport()
 {
-	// 반드시 파생 클래스 생성자에서만 호출한다. 같은 이름의 Native Subobject를 중복 생성하지 않는다.
-	if (!XRayBodyMesh)
-	{
-		XRayBodyMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("XRayBodyMesh"));
-		XRayBodyMesh->SetupAttachment(GetMesh());
-		XRayBodyMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		XRayBodyMesh->SetGenerateOverlapEvents(false);
-		XRayBodyMesh->SetCastShadow(false);
-		XRayBodyMesh->SetRenderCustomDepth(false);
-		XRayBodyMesh->SetRenderInMainPass(true);
-		XRayBodyMesh->bReceivesDecals = false;
-		XRayBodyMesh->SetVisibility(false, true);
-		XRayBodyMesh->SetHiddenInGame(true, true);
-		XRayBodyMesh->SetIsReplicated(false);
-	}
-
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface>
 		OverlayMaterialAsset(TEXT("/Game/Materials/M_EnemyOverlay.M_EnemyOverlay"));
 	if (OverlayMaterialAsset.Succeeded())
 	{
 		EnemyOverlayMaterial = OverlayMaterialAsset.Object;
 	}
+}
 
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface>
-		XRayMaterialAsset(TEXT("/Game/Materials/M_XRayMesh_Ally.M_XRayMesh_Ally"));
-	if (XRayMaterialAsset.Succeeded())
+void ABaseCharacter::CreateRuntimeXRayBodyMesh()
+{
+	if (GetNetMode() == NM_DedicatedServer || !SupportsXRay() || IsValid(XRayBodyMesh))
 	{
-		XRayMeshMaterial = XRayMaterialAsset.Object;
+		return;
 	}
 
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface>
-		XRayHiddenMaterialAsset(TEXT("/Game/Materials/M_XRayHidden.M_XRayHidden"));
-	if (XRayHiddenMaterialAsset.Succeeded())
-	{
-		XRayHiddenMaterial = XRayHiddenMaterialAsset.Object;
-	}
+	XRayBodyMesh = NewObject<USkeletalMeshComponent>(this, TEXT("XRayBodyMeshRuntime"), RF_Transient);
+	XRayBodyMesh->SetIsReplicated(false);
+	SyncXRayBodyMesh();
+	XRayBodyMesh->RegisterComponent();
 }
 
 void ABaseCharacter::SetEnemyOverlayEnabled(bool bEnabled)
@@ -280,15 +263,27 @@ void ABaseCharacter::SetXRayEnabled(bool bEnabled, float HealthNorm, float XRayA
 			continue;
 		}
 
-		MeshComponent->SetVisibility(bEnabled, true);
-		MeshComponent->SetHiddenInGame(!bEnabled, true);
+		const AAscenduntWeapon* Weapon = Cast<AAscenduntWeapon>(MeshComponent->GetOwner());
+		const bool bMaterialsReady = Weapon ? Weapon->AreXRayMaterialsReady() : bXRayMaterialsReady;
+		const bool bShowMesh = bEnabled && bMaterialsReady && MeshComponent->IsRegistered();
+		MeshComponent->SetVisibility(bShowMesh, true);
+		MeshComponent->SetHiddenInGame(!bShowMesh, true);
 		MeshComponent->SetRenderCustomDepth(false);
 
-		if (bEnabled)
+		if (bShowMesh)
 		{
 			MeshComponent->SetCustomPrimitiveDataFloat(0, FMath::Clamp(HealthNorm, 0.f, 1.f));
 			MeshComponent->SetCustomPrimitiveDataFloat(1, FMath::Clamp(XRayAlpha, 0.f, 1.f));
 		}
+	}
+}
+
+void ABaseCharacter::SetXRayMaterials(UMaterialInterface* Material, UMaterialInterface* HiddenMaterial)
+{
+	bXRayMaterialsReady = IsValid(Material) && IsValid(HiddenMaterial);
+	if (bXRayMaterialsReady)
+	{
+		ApplyXRayMaterialToMesh(XRayBodyMesh, Material, HiddenMaterial);
 	}
 }
 
@@ -337,13 +332,13 @@ void ABaseCharacter::SyncXRayBodyMesh()
 	XRayBodyMesh->SetVisibility(false, true);
 	XRayBodyMesh->SetHiddenInGame(true, true);
 
-	ApplyXRayMaterialToMesh(XRayBodyMesh);
 	XRayBodyMesh->MarkRenderStateDirty();
 }
 
-void ABaseCharacter::ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent) const
+void ABaseCharacter::ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent,
+	UMaterialInterface* Material, UMaterialInterface* HiddenMaterial) const
 {
-	if (!IsValid(MeshComponent) || !XRayMeshMaterial)
+	if (!IsValid(MeshComponent) || !IsValid(Material))
 	{
 		return;
 	}
@@ -355,7 +350,7 @@ void ABaseCharacter::ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent) cons
 
 	for (int32 MaterialIndex = 0; MaterialIndex < MaterialCount; ++MaterialIndex)
 	{
-		UMaterialInterface* MaterialToApply = XRayMeshMaterial;
+		UMaterialInterface* MaterialToApply = Material;
 
 		if (SkeletalMeshAsset)
 		{
@@ -368,9 +363,9 @@ void ABaseCharacter::ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent) cons
 				const FName SlotName = SkeletalMaterial.MaterialSlotName;
 				const UMaterialInterface* SourceMaterial = SkeletalMaterial.MaterialInterface;
 
-				if (XRayHiddenMaterial && ShouldHideXRayMaterialSlot(SlotName, SourceMaterial))
+				if (HiddenMaterial && ShouldHideXRayMaterialSlot(SlotName, SourceMaterial))
 				{
-					MaterialToApply = XRayHiddenMaterial;
+					MaterialToApply = HiddenMaterial;
 				}
 			}
 		}
@@ -507,6 +502,8 @@ void ABaseCharacter::DebugIncreasePulse()
 // Called when the game starts or when spawned
 void ABaseCharacter::BeginPlay()
 {
+	// Blueprint BeginPlay and component callbacks may already query the local X-Ray mesh.
+	CreateRuntimeXRayBodyMesh();
 	Super::BeginPlay();
 
 	// Enforce presentation-only SkeletalMesh even when an existing Blueprint CDO
@@ -516,9 +513,14 @@ void ABaseCharacter::BeginPlay()
 	{
 		SkeletalMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		SkeletalMesh->SetGenerateOverlapEvents(false);
-	}
 
-	SyncXRayBodyMesh();
+		// Blueprint BeginPlay may replace the source asset after the runtime mesh was created.
+		if (IsValid(XRayBodyMesh) && XRayBodyMesh->GetSkeletalMeshAsset() != SkeletalMesh->GetSkeletalMeshAsset())
+		{
+			bXRayMaterialsReady = false;
+			SyncXRayBodyMesh();
+		}
+	}
 
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{

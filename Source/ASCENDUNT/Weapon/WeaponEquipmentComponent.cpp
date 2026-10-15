@@ -293,7 +293,10 @@ void UWeaponEquipmentComponent::ServerReleaseWeaponsForPool()
 		// HideWeaponMesh는 WeaponMesh(스켈레탈)만 숨겨서 StaticWeaponMesh를 쓰는
 		// 무기가 죽은 자리에 남는다. 무기는 폰과 별개 액터라 폰을 숨겨도 따라오지 않는다.
 		Weapon->SetActorHiddenInGame(true);
-		Weapon->SetXRayMeshEnabled(false);
+		if (Weapon->GetNetMode() != NM_DedicatedServer)
+		{
+			Weapon->SetXRayMeshEnabled(false);
+		}
 	}
 
 	// WeaponInventory는 유지한다. 재사용 시 그대로 다시 장착한다.
@@ -367,7 +370,10 @@ void UWeaponEquipmentComponent::HideWeaponMesh(AAscenduntWeapon* Weapon)
 		StaticMesh->SetHiddenInGame(true);
 	}
 
-	Weapon->SetXRayMeshEnabled(false);
+	if (Weapon->GetNetMode() != NM_DedicatedServer)
+	{
+		Weapon->SetXRayMeshEnabled(false);
+	}
 }
 
 void UWeaponEquipmentComponent::ShowWeaponMesh(AAscenduntWeapon* Weapon)
@@ -389,7 +395,10 @@ void UWeaponEquipmentComponent::ShowWeaponMesh(AAscenduntWeapon* Weapon)
 	}
 
 	// X-Ray 무기 메시의 표시 여부는 AscVisionLocalPlayerSubsystem이 팀/로컬 상태에 따라 결정한다.
-	Weapon->SetXRayMeshEnabled(false);
+	if (Weapon->GetNetMode() != NM_DedicatedServer)
+	{
+		Weapon->SetXRayMeshEnabled(false);
+	}
 }
 
 

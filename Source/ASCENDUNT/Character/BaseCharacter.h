@@ -77,6 +77,7 @@ public:
 	void SetEnemyOverlayEnabled(bool bEnabled);
 	void SetVisionBlockerEnabled(bool bEnabled);
 	void SetXRayEnabled(bool bEnabled, float HealthNorm = 1.f, float XRayAlpha = 1.f);
+	void SetXRayMaterials(UMaterialInterface* Material, UMaterialInterface* HiddenMaterial);
 
 	// AI는 둘 다 false, Hero만 true. Vision Subsystem이 불필요한 렌더 상태 변경을 건너뛴다.
 	virtual bool SupportsEnemyOverlay() const { return false; }
@@ -130,17 +131,12 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Ascendunt|Vision")
 	TObjectPtr<UMaterialInterface> EnemyOverlayMaterial;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Ascendunt|Vision|XRay")
-	TObjectPtr<UMaterialInterface> XRayMeshMaterial;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Ascendunt|Vision|XRay")
-	TObjectPtr<UMaterialInterface> XRayHiddenMaterial;
-
-	// X-Ray/Enemy Overlay를 사용하는 파생 클래스의 생성자에서만 호출한다.
-	// BaseCharacter 생성자에서 만들지 않으므로 AI에는 XRayBodyMesh 자체가 존재하지 않는다.
+	// Configure the Hero enemy overlay. Shared X-Ray assets belong to the local vision subsystem.
 	void InitializeVisionPresentationSupport();
+	void CreateRuntimeXRayBodyMesh();
 	void SyncXRayBodyMesh();
-	void ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent) const;
+	void ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent,
+		UMaterialInterface* Material, UMaterialInterface* HiddenMaterial) const;
 	bool HasToken(const FString& UpperName, const FString& Token) const;
 	bool ShouldHideXRayMaterialSlot(const FName SlotName, const UMaterialInterface* SourceMaterial) const;
 private:
@@ -154,8 +150,10 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Ascendunt|Vision", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UAscVisionMarkerComponent> VisionMarkerComponent;
 
-	UPROPERTY(VisibleAnywhere, Category = "Ascendunt|Vision|XRay", meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(VisibleInstanceOnly, Transient, Category = "Ascendunt|Vision|XRay", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USkeletalMeshComponent> XRayBodyMesh;
+
+	bool bXRayMaterialsReady = false;
 
 protected:
 	// ===== Anti - ESP Test용 코드 =====

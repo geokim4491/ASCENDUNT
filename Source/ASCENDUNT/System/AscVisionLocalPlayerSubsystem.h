@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
+#include "UObject/SoftObjectPtr.h"
 #include "ASCENDUNT/AbilitySystem/Attributes/AscenduntHealthSet.h"
 #include "AscVisionLocalPlayerSubsystem.generated.h"
 
@@ -13,6 +14,8 @@ class ABaseCharacter;
 class AAscenduntPlayerState;
 class UAscenduntHealthComponent;
 class UAscTargetAwarenessComponent;
+class UMaterialInterface;
+struct FStreamableHandle;
 
 UCLASS()
 class ASCENDUNT_API UAscVisionLocalPlayerSubsystem : public ULocalPlayerSubsystem
@@ -20,6 +23,7 @@ class ASCENDUNT_API UAscVisionLocalPlayerSubsystem : public ULocalPlayerSubsyste
 	GENERATED_BODY()
 
 public:
+	UAscVisionLocalPlayerSubsystem();
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	virtual void PlayerControllerChanged(APlayerController* NewPlayerController) override;
@@ -28,6 +32,7 @@ public:
 	void NotifyLocalContextChanged();
 	void NotifyCharacterBeganPlay(ABaseCharacter* Character);
 	void NotifyCharacterPlayerStateChanged(ABaseCharacter* Character);
+	void NotifyWeaponBeganPlay(AAscenduntWeapon* Weapon);
 
 private:
 	enum class ELocalVisionRelation : uint8
@@ -41,6 +46,7 @@ private:
 	static constexpr float CriticalHealthThreshold = 0.4f;
 
 	void HandlePostWorldInit(UWorld* World, const UWorld::InitializationValues);
+	void HandleWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources);
 	void AttachToWorld(UWorld* World);
 	void DetachFromWorld();
 	bool RefreshLocalContext();
@@ -56,6 +62,9 @@ private:
 
 	void RefreshAllVisuals();
 	void RefreshVisualsForCharacter(ABaseCharacter* Character);
+	void PrepareXRayMaterials(ABaseCharacter* Character);
+	void LoadXRayMaterials();
+	void HandleXRayMaterialsLoaded(TWeakObjectPtr<UWorld> LoadingWorld);
 	ELocalVisionRelation GetRelationToLocal(const ABaseCharacter* Target) const;
 
 
@@ -83,6 +92,20 @@ private:
 		APawn* OldPawn, APawn* NewPawn);
 
 private:
+	friend class FAscVisionWorldMaterialsTest;
+
+	// Common presentation assets, preloaded once per non-menu game world.
+	UPROPERTY(EditDefaultsOnly, Category = "Vision|XRay")
+	TSoftObjectPtr<UMaterialInterface> XRayMaterial;
+	UPROPERTY(EditDefaultsOnly, Category = "Vision|XRay")
+	TSoftObjectPtr<UMaterialInterface> XRayHiddenMaterial;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> LoadedXRayMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> LoadedXRayHiddenMaterial;
+	TSharedPtr<FStreamableHandle> XRayMaterialsLoadHandle;
+
 	TSet<TWeakObjectPtr<ABaseCharacter>> TrackedCharacters;
 
 	TWeakObjectPtr<UWorld> BoundWorld;
@@ -92,5 +115,6 @@ private:
 	TWeakObjectPtr<UAscTargetAwarenessComponent> CachedTargetAwarenessComponent;
 
 	FDelegateHandle PostWorldInitHandle;
+	FDelegateHandle WorldCleanupHandle;
 	FDelegateHandle ActorSpawnedHandle;
 };

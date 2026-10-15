@@ -37,7 +37,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Weapon")
 	TObjectPtr<UStaticMeshComponent> StaticWeaponMesh;
 
-	UPROPERTY(VisibleAnywhere, Category = "Weapon|XRay")
+	UPROPERTY(VisibleInstanceOnly, Transient, Category = "Weapon|XRay")
 	TObjectPtr<USkeletalMeshComponent> XRayWeaponMesh;
 
 	/**
@@ -51,11 +51,8 @@ public:
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "Weapon|FirstPerson")
 	TObjectPtr<USkeletalMeshComponent> WeaponMesh1P;
-	UPROPERTY(VisibleAnywhere, Category = "Weapon|XRay")
+	UPROPERTY(VisibleInstanceOnly, Transient, Category = "Weapon|XRay")
 	TObjectPtr<UStaticMeshComponent> XRayStaticWeaponMesh;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Weapon|XRay")
-	TObjectPtr<UMaterialInterface> XRayMeshMaterial;
 
 	UPROPERTY(BlueprintAssignable)
 	FOnAmmoChanged OnAmmoChanged;
@@ -136,6 +133,8 @@ public:
 	void GatherXRayMeshes(TArray<UMeshComponent*>& OutMeshes) const;
 
 	void SetXRayMeshEnabled(bool bEnabled, float HealthNorm = 1.f, float XRayAlpha = 1.f);
+	void SetXRayMaterial(UMaterialInterface* Material);
+	bool AreXRayMaterialsReady() const { return bXRayMaterialReady; }
 
 	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_PlayWeaponMontage(UAnimMontage* Montage, float PlayRate);
@@ -310,6 +309,8 @@ private:
 
 	void InitAmmoFromAttributes(UAscenduntAbilitySystemComponent* AscenduntASC);
 
+	void CreateRuntimeXRayMeshes();
 	void SyncXRayWeaponMesh();
-	void ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent) const;
+	void ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent, UMaterialInterface* Material) const;
+	bool bXRayMaterialReady = false;
 };

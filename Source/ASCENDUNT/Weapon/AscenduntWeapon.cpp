@@ -8,13 +8,15 @@
 #include "ASCENDUNT/AbilitySystem/Attributes/AscenduntWeaponSet.h"
 #include "AbilitySystemGlobals.h"
 #include "ASCENDUNT/Character/AI/BaseAICharacter.h"
+#include "ASCENDUNT/System/AscVisionLocalPlayerSubsystem.h"
+#include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
 
 #include "ASCENDUNT/AscenduntGameplayTags.h"
 #include "Components/MeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
-#include "UObject/ConstructorHelpers.h"
 #include "DrawDebugHelpers.h"
 
 AAscenduntWeapon::AAscenduntWeapon()
@@ -39,21 +41,6 @@ AAscenduntWeapon::AAscenduntWeapon()
 		StaticWeaponMesh->SetIsReplicated(false);
 	}
 
-	XRayWeaponMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("XRayWeaponMesh"));
-	if (XRayWeaponMesh)
-	{
-		XRayWeaponMesh->SetupAttachment(WeaponMesh ? WeaponMesh : RootComponent);
-		XRayWeaponMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		XRayWeaponMesh->SetGenerateOverlapEvents(false);
-		XRayWeaponMesh->SetCastShadow(false);
-		XRayWeaponMesh->SetRenderCustomDepth(false);
-		XRayWeaponMesh->SetRenderInMainPass(true);
-		XRayWeaponMesh->bReceivesDecals = false;
-		XRayWeaponMesh->SetVisibility(false, true);
-		XRayWeaponMesh->SetHiddenInGame(true, true);
-		XRayWeaponMesh->SetIsReplicated(false);
-	}
-
 	// 1인칭 전용 무기 메시. 소켓 부착과 가시성은 UHeroFirstPersonComponent 가 소유한다.
 	// 여기서는 렌더 성질만 확정한다.
 	WeaponMesh1P = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("WeaponMesh1P"));
@@ -68,35 +55,26 @@ AAscenduntWeapon::AAscenduntWeapon()
 		WeaponMesh1P->bReceivesDecals = false;
 		WeaponMesh1P->FirstPersonPrimitiveType = EFirstPersonPrimitiveType::FirstPerson;
 	}
-
-	XRayStaticWeaponMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("XRayStaticWeaponMesh"));
-	if (XRayStaticWeaponMesh)
-	{
-		XRayStaticWeaponMesh->SetupAttachment(StaticWeaponMesh ? StaticWeaponMesh : RootComponent);
-		XRayStaticWeaponMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		XRayStaticWeaponMesh->SetGenerateOverlapEvents(false);
-		XRayStaticWeaponMesh->SetCastShadow(false);
-		XRayStaticWeaponMesh->SetRenderCustomDepth(false);
-		XRayStaticWeaponMesh->SetRenderInMainPass(true);
-		XRayStaticWeaponMesh->bReceivesDecals = false;
-		XRayStaticWeaponMesh->SetVisibility(false, true);
-		XRayStaticWeaponMesh->SetHiddenInGame(true, true);
-		XRayStaticWeaponMesh->SetIsReplicated(false);
-	}
-
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface>
-		XRayMaterialAsset(TEXT("/Game/Materials/M_XRayMesh_Ally.M_XRayMesh_Ally"));
-	if (XRayMaterialAsset.Succeeded())
-	{
-		XRayMeshMaterial = XRayMaterialAsset.Object;
-	}
 }
 
 void AAscenduntWeapon::BeginPlay()
 {
+	CreateRuntimeXRayMeshes();
 	Super::BeginPlay();
 
-	if (GetNetMode() == NM_DedicatedServer && Cast<ABaseAICharacter>(GetOwner()))
+	const bool bDedicatedServer = GetNetMode() == NM_DedicatedServer;
+	if (!bDedicatedServer &&
+		((IsValid(XRayWeaponMesh) && XRayWeaponMesh->GetSkeletalMeshAsset() !=
+			(IsValid(WeaponMesh) ? WeaponMesh->GetSkeletalMeshAsset() : nullptr)) ||
+		 (IsValid(XRayStaticWeaponMesh) && XRayStaticWeaponMesh->GetStaticMesh() !=
+			(IsValid(StaticWeaponMesh) ? StaticWeaponMesh->GetStaticMesh() : nullptr))))
+	{
+		// Preserve source asset changes made by Blueprint BeginPlay.
+		bXRayMaterialReady = false;
+		SyncXRayWeaponMesh();
+	}
+
+	if (bDedicatedServer && Cast<ABaseAICharacter>(GetOwner()))
 	{
 		// AI 무기의 SkeletalMesh는 서버 Gameplay에 필요하지 않다.
 		// 서버는 탄약/Ability/Actor 상태만 유지하고, 무기 Pose/Animation은 클라이언트 연출로 분리한다.
@@ -116,8 +94,21 @@ void AAscenduntWeapon::BeginPlay()
 		return;
 	}
 
-	SyncXRayWeaponMesh();
 	SyncWeaponMesh1P();
+
+	if (!bDedicatedServer)
+	{
+		if (UGameInstance* GameInstance = GetGameInstance())
+		{
+			for (ULocalPlayer* LocalPlayer : GameInstance->GetLocalPlayers())
+			{
+				if (UAscVisionLocalPlayerSubsystem* Vision = LocalPlayer->GetSubsystem<UAscVisionLocalPlayerSubsystem>())
+				{
+					Vision->NotifyWeaponBeganPlay(this);
+				}
+			}
+		}
+	}
 }
 
 FTransform AAscenduntWeapon::GetMuzzleTransform() const
@@ -304,6 +295,7 @@ void AAscenduntWeapon::GatherXRayMeshes(TArray<UMeshComponent*>& OutMeshes) cons
 
 void AAscenduntWeapon::SetXRayMeshEnabled(bool bEnabled, float HealthNorm, float XRayAlpha)
 {
+	bEnabled = bEnabled && bXRayMaterialReady;
 	UMeshComponent* ActiveMesh = GetActiveWeaponMesh();
 	UMeshComponent* ActiveXRayMesh = nullptr;
 
@@ -341,6 +333,39 @@ void AAscenduntWeapon::SetXRayMeshEnabled(bool bEnabled, float HealthNorm, float
 	ActiveXRayMesh->MarkRenderStateDirty();
 }
 
+void AAscenduntWeapon::SetXRayMaterial(UMaterialInterface* Material)
+{
+	bXRayMaterialReady = IsValid(Material);
+	if (bXRayMaterialReady)
+	{
+		ApplyXRayMaterialToMesh(XRayWeaponMesh, Material);
+		ApplyXRayMaterialToMesh(XRayStaticWeaponMesh, Material);
+	}
+}
+
+void AAscenduntWeapon::CreateRuntimeXRayMeshes()
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (!IsValid(XRayWeaponMesh))
+	{
+		XRayWeaponMesh = NewObject<USkeletalMeshComponent>(this, TEXT("XRayWeaponMeshRuntime"), RF_Transient);
+		XRayWeaponMesh->SetIsReplicated(false);
+	}
+	if (!IsValid(XRayStaticWeaponMesh))
+	{
+		XRayStaticWeaponMesh = NewObject<UStaticMeshComponent>(this, TEXT("XRayStaticWeaponMeshRuntime"), RF_Transient);
+		XRayStaticWeaponMesh->SetIsReplicated(false);
+	}
+
+	SyncXRayWeaponMesh();
+	XRayWeaponMesh->RegisterComponent();
+	XRayStaticWeaponMesh->RegisterComponent();
+}
+
 void AAscenduntWeapon::SyncXRayWeaponMesh()
 {
 	USkeletalMeshComponent* SourceSkeletalMesh = IsValid(WeaponMesh) ? WeaponMesh.Get() : nullptr;
@@ -358,7 +383,6 @@ void AAscenduntWeapon::SyncXRayWeaponMesh()
 		XRayWeaponMesh->bReceivesDecals = false;
 		XRayWeaponMesh->SetVisibility(false, true);
 		XRayWeaponMesh->SetHiddenInGame(true, true);
-		ApplyXRayMaterialToMesh(XRayWeaponMesh);
 		XRayWeaponMesh->MarkRenderStateDirty();
 	}
 
@@ -376,14 +400,13 @@ void AAscenduntWeapon::SyncXRayWeaponMesh()
 		XRayStaticWeaponMesh->bReceivesDecals = false;
 		XRayStaticWeaponMesh->SetVisibility(false, true);
 		XRayStaticWeaponMesh->SetHiddenInGame(true, true);
-		ApplyXRayMaterialToMesh(XRayStaticWeaponMesh);
 		XRayStaticWeaponMesh->MarkRenderStateDirty();
 	}
 }
 
-void AAscenduntWeapon::ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent) const
+void AAscenduntWeapon::ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent, UMaterialInterface* Material) const
 {
-	if (!IsValid(MeshComponent) || !XRayMeshMaterial)
+	if (!IsValid(MeshComponent) || !IsValid(Material))
 	{
 		return;
 	}
@@ -391,7 +414,7 @@ void AAscenduntWeapon::ApplyXRayMaterialToMesh(UMeshComponent* MeshComponent) co
 	const int32 MaterialCount = FMath::Max(1, MeshComponent->GetNumMaterials());
 	for (int32 MaterialIndex = 0; MaterialIndex < MaterialCount; ++MaterialIndex)
 	{
-		MeshComponent->SetMaterial(MaterialIndex, XRayMeshMaterial);
+		MeshComponent->SetMaterial(MaterialIndex, Material);
 	}
 }
 

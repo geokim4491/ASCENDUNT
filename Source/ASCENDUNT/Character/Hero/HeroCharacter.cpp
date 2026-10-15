@@ -55,8 +55,7 @@ AHeroCharacter::AHeroCharacter(const FObjectInitializer& ObjectInitializer)
 	// This also preserves the existing first-person self-shadow requirement on clients.
 	MeshComp->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
 
-	// Hero만 Ally X-Ray / PvP Enemy Overlay를 사용한다.
-	// BaseCharacter에서 생성하지 않기 때문에 AI에는 XRayBodyMesh가 존재하지 않는다.
+	// Hero presentation asset defaults. X-Ray meshes are created locally during BeginPlay.
 	InitializeVisionPresentationSupport();
 
 	HeroInputComponent = CreateDefaultSubobject<UHeroInputComponent>(TEXT("HeroInputComponent"));
