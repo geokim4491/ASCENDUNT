@@ -231,6 +231,9 @@ bool UHeroInitComponent::TryEnterGASInitialized()
 
     ASC->AbilityActorInfo->SkeletalMeshComponent = OwnerPawn->GetMesh();
 
+    // Configure on both server and client so predicted activation uses the same rules.
+    ASC->SetTagRelationshipMapping(CachedPS->GetPawnData()->TagRelationshipMapping);
+
     // AbilitySet은 서버에서 부여함.
     if (OwnerPawn->HasAuthority())
     {

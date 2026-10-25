@@ -9,6 +9,7 @@
 #include "AscenduntAbilitySystemComponent.generated.h"
 
 class UAscenduntGameplayAbility;
+class UAbilityTagRelationshipMapping;
 class UTexture2D;
 enum class EAscenduntAbilityActivationGroup : uint8;
 
@@ -77,6 +78,15 @@ public:
 	/** Re-runs ActivationPolicy::OnSpawn abilities after a preserved AbilitySet receives a new AvatarActor. */
 	void TryActivateAbilitiesOnSpawn();
 
+	/** Sets the per-pawn mapping used to expand ability tag relationships. */
+	void SetTagRelationshipMapping(UAbilityTagRelationshipMapping* NewMapping);
+
+	/** Adds activation requirements implied by the supplied ability tags. */
+	void GetAdditionalActivationTagRequirements(
+		const FGameplayTagContainer& AbilityTags,
+		FGameplayTagContainer& OutActivationRequired,
+		FGameplayTagContainer& OutActivationBlocked) const;
+
 	/** UI helper: returns the replicated/predicted GAS cooldown for an ability identity tag. */
 	UFUNCTION(BlueprintPure, Category = "Ascendunt|Ability|Cooldown")
 	bool GetAbilityCooldownByAbilityTag(FGameplayTag AbilityTag, float& TimeRemaining, float& CooldownDuration) const;
@@ -106,7 +116,23 @@ public:
 	void Client_PlayCombatFeedback(AActor* FeedbackTarget, FGameplayTag CueTag, FGameplayCueParameters Params);
 
 
+	/** Mirrors ServerOnly relationship block/cancel state to the owning client. */
+	UFUNCTION(Client, Reliable)
+	void Client_ApplyServerOnlyAbilityTagRelationshipState(
+		FGameplayTagContainer BlockTags,
+		bool bEnableBlockTags,
+		FGameplayTagContainer CancelTags,
+		bool bExecuteCancelTags);
+
 protected:
+	virtual void ApplyAbilityBlockAndCancelTags(
+		const FGameplayTagContainer& AbilityTags,
+		UGameplayAbility* RequestingAbility,
+		bool bEnableBlockTags,
+		const FGameplayTagContainer& BlockTags,
+		bool bExecuteCancelTags,
+		const FGameplayTagContainer& CancelTags) override;
+
 	// Handles to abilities that had their input pressed this frame.
 	TArray<FGameplayAbilitySpecHandle> InputPressedSpecHandles;
 
@@ -117,4 +143,7 @@ protected:
 	TArray<FGameplayAbilitySpecHandle> InputHeldSpecHandles;
 
 	TArray<TArray<TWeakObjectPtr<UAscenduntGameplayAbility>>> ActivationGroupAbilities;
+
+	UPROPERTY()
+	TObjectPtr<UAbilityTagRelationshipMapping> TagRelationshipMapping;
 };

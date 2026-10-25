@@ -112,6 +112,12 @@ public:
 
 protected:
 	// --- UGameplayAbility overrides ---
+	virtual bool DoesAbilitySatisfyTagRequirements(
+		const UAbilitySystemComponent& AbilitySystemComponent,
+		const FGameplayTagContainer* SourceTags = nullptr,
+		const FGameplayTagContainer* TargetTags = nullptr,
+		FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
+
 	virtual bool CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
 		const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayTagContainer* SourceTags,

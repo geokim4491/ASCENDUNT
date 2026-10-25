@@ -11,6 +11,7 @@
 #include "AbilitySystemGlobals.h"
 #include "GameplayCueManager.h"
 #include "ASCENDUNT/AbilitySystem/Abilities/AscenduntGameplayAbility.h"
+#include "ASCENDUNT/AbilitySystem/AbilityTagRelationshipMapping.h"
 #include "ASCENDUNT/AscenduntGameplayTags.h"
 
 UE_DEFINE_GAMEPLAY_TAG(TAG_Gameplay_AbilityInputBlocked, "Gameplay.AbilityInputBlocked");
@@ -200,6 +201,101 @@ void UAscenduntAbilitySystemComponent::TryActivateAbilitiesOnSpawn()
 		{
 			AscenduntAbility->TryActivateAbilityOnSpawn(ActorInfo, AbilitySpec);
 		}
+	}
+}
+
+void UAscenduntAbilitySystemComponent::SetTagRelationshipMapping(UAbilityTagRelationshipMapping* NewMapping)
+{
+	TagRelationshipMapping = NewMapping;
+}
+
+void UAscenduntAbilitySystemComponent::GetAdditionalActivationTagRequirements(
+	const FGameplayTagContainer& AbilityTags,
+	FGameplayTagContainer& OutActivationRequired,
+	FGameplayTagContainer& OutActivationBlocked) const
+{
+	if (TagRelationshipMapping)
+	{
+		TagRelationshipMapping->GetRequiredAndBlockedActivationTags(
+			AbilityTags,
+			&OutActivationRequired,
+			&OutActivationBlocked);
+	}
+}
+
+void UAscenduntAbilitySystemComponent::ApplyAbilityBlockAndCancelTags(
+	const FGameplayTagContainer& AbilityTags,
+	UGameplayAbility* RequestingAbility,
+	bool bEnableBlockTags,
+	const FGameplayTagContainer& BlockTags,
+	bool bExecuteCancelTags,
+	const FGameplayTagContainer& CancelTags)
+{
+	FGameplayTagContainer ModifiedBlockTags = BlockTags;
+	FGameplayTagContainer ModifiedCancelTags = CancelTags;
+
+	if (TagRelationshipMapping)
+	{
+		TagRelationshipMapping->GetAbilityTagsToBlockAndCancel(
+			AbilityTags,
+			&ModifiedBlockTags,
+			&ModifiedCancelTags);
+	}
+
+	// ServerOnly abilities never run a local ability instance on the owning client, so GAS's
+	// normal local block/cancel bookkeeping cannot affect a predicted ability there. Mirror the
+	// resolved relationship state explicitly. LocalPredicted abilities are deliberately excluded
+	// to avoid applying their block counts twice.
+	if (RequestingAbility && IsOwnerActorAuthoritative() &&
+		RequestingAbility->GetNetExecutionPolicy() == EGameplayAbilityNetExecutionPolicy::ServerOnly &&
+		((bEnableBlockTags && !ModifiedBlockTags.IsEmpty()) ||
+		 (!bEnableBlockTags && !ModifiedBlockTags.IsEmpty()) ||
+		 (bExecuteCancelTags && !ModifiedCancelTags.IsEmpty())))
+	{
+		Client_ApplyServerOnlyAbilityTagRelationshipState(
+			ModifiedBlockTags,
+			bEnableBlockTags,
+			ModifiedCancelTags,
+			bExecuteCancelTags);
+	}
+
+	Super::ApplyAbilityBlockAndCancelTags(
+		AbilityTags,
+		RequestingAbility,
+		bEnableBlockTags,
+		ModifiedBlockTags,
+		bExecuteCancelTags,
+		ModifiedCancelTags);
+}
+
+void UAscenduntAbilitySystemComponent::Client_ApplyServerOnlyAbilityTagRelationshipState_Implementation(
+	FGameplayTagContainer BlockTags,
+	bool bEnableBlockTags,
+	FGameplayTagContainer CancelTags,
+	bool bExecuteCancelTags)
+{
+	// A listen-server host uses the authoritative ASC locally; applying the RPC there would
+	// duplicate the block count already maintained by Super::ApplyAbilityBlockAndCancelTags.
+	if (IsOwnerActorAuthoritative())
+	{
+		return;
+	}
+
+	if (!BlockTags.IsEmpty())
+	{
+		if (bEnableBlockTags)
+		{
+			BlockAbilitiesWithTags(BlockTags);
+		}
+		else
+		{
+			UnBlockAbilitiesWithTags(BlockTags);
+		}
+	}
+
+	if (bExecuteCancelTags && !CancelTags.IsEmpty())
+	{
+		CancelAbilities(&CancelTags);
 	}
 }
 

@@ -8,6 +8,7 @@
 #include "ASCENDUNT/AscenduntGameplayTags.h"
 #include "ASCENDUNT/Camera/AscenduntCameraMode.h"
 #include "AbilitySystemLog.h"
+#include "AbilitySystemGlobals.h"
 #include "GameFramework/Character.h"
 
 
@@ -82,6 +83,69 @@ ACharacter* UAscenduntGameplayAbility::GetCharacterFromActorInfo() const
 UHeroCameraComponent* UAscenduntGameplayAbility::GetHeroCameraComponentFromActorInfo() const
 {
 	return CurrentActorInfo ? UHeroCameraComponent::FindHeroCameraComponent(CurrentActorInfo->AvatarActor.Get()) : nullptr;
+}
+
+bool UAscenduntGameplayAbility::DoesAbilitySatisfyTagRequirements(
+	const UAbilitySystemComponent& AbilitySystemComponent,
+	const FGameplayTagContainer* SourceTags,
+	const FGameplayTagContainer* TargetTags,
+	FGameplayTagContainer* OptionalRelevantTags) const
+{
+	if (!Super::DoesAbilitySatisfyTagRequirements(
+		AbilitySystemComponent,
+		SourceTags,
+		TargetTags,
+		OptionalRelevantTags))
+	{
+		return false;
+	}
+
+	const UAscenduntAbilitySystemComponent* AscASC =
+		Cast<UAscenduntAbilitySystemComponent>(&AbilitySystemComponent);
+	if (!AscASC)
+	{
+		return true;
+	}
+
+	FGameplayTagContainer AdditionalRequiredTags;
+	FGameplayTagContainer AdditionalBlockedTags;
+	AscASC->GetAdditionalActivationTagRequirements(
+		GetAssetTags(),
+		AdditionalRequiredTags,
+		AdditionalBlockedTags);
+
+	if (AdditionalRequiredTags.IsEmpty() && AdditionalBlockedTags.IsEmpty())
+	{
+		return true;
+	}
+
+	FGameplayTagContainer OwnedTags;
+	AbilitySystemComponent.GetOwnedGameplayTags(OwnedTags);
+
+	const bool bBlocked = OwnedTags.HasAny(AdditionalBlockedTags);
+	const bool bMissingRequired = !OwnedTags.HasAll(AdditionalRequiredTags);
+
+	if (OptionalRelevantTags)
+	{
+		UAbilitySystemGlobals& AbilitySystemGlobals = UAbilitySystemGlobals::Get();
+
+		if (bBlocked)
+		{
+			OptionalRelevantTags->AddTag(AbilitySystemGlobals.ActivateFailTagsBlockedTag);
+			OptionalRelevantTags->AppendMatchingTags(OwnedTags, AdditionalBlockedTags);
+		}
+
+		if (bMissingRequired)
+		{
+			OptionalRelevantTags->AddTag(AbilitySystemGlobals.ActivateFailTagsMissingTag);
+
+			FGameplayTagContainer MissingTags = AdditionalRequiredTags;
+			MissingTags.RemoveTags(OwnedTags.GetGameplayTagParents());
+			OptionalRelevantTags->AppendTags(MissingTags);
+		}
+	}
+
+	return !bBlocked && !bMissingRequired;
 }
 
 bool UAscenduntGameplayAbility::CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
